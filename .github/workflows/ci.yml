@@ -1,0 +1,14 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "master"]
+    tags: ["*"]
+  pull_request:
+    branches: ["main", "master"]
+
+jobs:
+  build:
+    uses: SamuelMarks/c-ci/.github/workflows/c-cmake-ci.yml@master
+    with:
+      extra_apt_packages: "libgtk-3-dev"

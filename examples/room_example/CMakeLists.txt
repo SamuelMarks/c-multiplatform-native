@@ -1,0 +1,31 @@
+cmake_minimum_required(VERSION 3.14)
+project(room_example C)
+
+set(CMAKE_C_STANDARD 90)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
+
+if(MSVC)
+    add_compile_options(/W4 /WX)
+else()
+    add_compile_options(-Wall -Wextra -Wpedantic -Werror)
+endif()
+
+if(NOT TARGET cmn)
+    set(BUILD_TESTING OFF)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../include/cmn/room.h")
+        add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../.." "${CMAKE_CURRENT_BINARY_DIR}/cmn" EXCLUDE_FROM_ALL)
+    endif()
+    set(BUILD_TESTING ON)
+endif()
+
+add_executable(room_example src/main.c src/room_app.c)
+target_include_directories(room_example PRIVATE src)
+target_link_libraries(room_example PRIVATE cmn)
+
+enable_testing()
+add_executable(room_example_tests tests/test_main.c src/room_app.c)
+target_compile_definitions(room_example_tests PRIVATE -DCMN_TESTING=1)
+target_include_directories(room_example_tests PRIVATE ${greatest_SOURCE_DIR} src)
+target_link_libraries(room_example_tests PRIVATE cmn)
+add_test(NAME room_example_tests COMMAND room_example_tests)
