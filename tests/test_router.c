@@ -191,11 +191,7 @@ TEST test_router_oom(void) {
 
   for (i = 0; i < 32; i++) {
     char path[32];
-#if defined(_MSC_VER)
-    sprintf_s(path, sizeof(path), "/path%d", i);
-#else
-    snprintf(path, sizeof(path), "/path%d", i);
-#endif
+    ASSERT_EQ(CMN_SUCCESS, cmn_sprintf_s(path, sizeof(path), "/path%d", i));
     ASSERT_EQ(CMN_SUCCESS,
               cmn_router_register(router, path, factory_capture_params, NULL));
   }

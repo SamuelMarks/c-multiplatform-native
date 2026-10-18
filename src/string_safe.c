@@ -9,6 +9,10 @@
 #endif
 /* clang-format on */
 
+#if !defined(_MSC_VER) && defined(__STRICT_ANSI__) && !defined(vsnprintf)
+extern int vsnprintf(char *str, size_t size, const char *format, va_list ap);
+#endif
+
 /**
  * @file string_safe.c
  * @brief Implementation of safe string wrappers.

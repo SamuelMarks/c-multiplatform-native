@@ -8,6 +8,7 @@ extern "C" {
 /* clang-format off */
 #include <cmn/error.h>
 #include "app_state.h"
+#include <cmn/layout.h>
 #include <cmn/widget.h>
 /* clang-format on */
 
@@ -38,7 +39,7 @@ typedef struct {
   app_state_t *app_state;   /**< Application state. */
   cmn_label_t *lbl_welcome; /**< Welcome label. */
   cmn_button_t *btn_logout; /**< Logout button. */
-  cmn_vbox_t *root;         /**< Root layout. */
+  cmn_flex_t *root;         /**< Root responsive Flexbox layout. */
 } welcome_view_data_t;
 
 /** @brief Active welcome view data instance. */

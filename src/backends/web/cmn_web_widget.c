@@ -162,6 +162,10 @@ static cmn_error_e resolve_dom_id(const void *ptr, int is_container,
   case CMN_WIDGET_KIND_HBOX:
     *out_dom_id = ((const cmn_hbox_t *)ptr)->dom_id;
     break;
+  case CMN_WIDGET_KIND_FLEX:
+  case CMN_WIDGET_KIND_GRID:
+    *out_dom_id = 0;
+    break;
   case CMN_WIDGET_KIND_BUTTON:
     if (is_container) {
       return CMN_ERR_INVAL;
@@ -742,6 +746,28 @@ cmn_error_e cmn_textbox_set_text(cmn_textbox_t *textbox, const char *text) {
       },
       textbox->dom_id, text);
   return cmn_strcpy_s(textbox->text_cache, sizeof(textbox->text_cache), text);
+}
+
+/**
+ * @brief Configures whether a text box masks its characters using HTML
+ * `<input type="password">`.
+ * @param textbox The text box to modify.
+ * @param is_password Non-zero (`cmn_true`) to enable password masking, `0`
+ * (`cmn_false`) for plain text.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_textbox_set_password(cmn_textbox_t *textbox, int is_password) {
+  if (textbox == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  EM_ASM(
+      {
+        var el = document.getElementById("cmn_" + $0);
+        if (el)
+          el.type = $1 ? "password" : "text";
+      },
+      textbox->dom_id, (int)is_password);
+  return CMN_SUCCESS;
 }
 
 /**

@@ -338,6 +338,19 @@ CMN_NO_DISCARD cmn_error_e cmn_textbox_set_text(cmn_textbox_t *textbox,
                                                 const char *text);
 
 /**
+ * @brief Configures whether a text box masks its characters using the host OS
+ * native password field behavior (`NSSecureTextField`, `ES_PASSWORD` /
+ * `EM_SETPASSWORDCHAR`, `gtk_entry_set_visibility`, `<input type="password">`,
+ * `secureTextEntry`).
+ * @param textbox The text box to modify.
+ * @param is_password Non-zero (`1`) to enable password masking, `0` for plain
+ * text.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+CMN_NO_DISCARD cmn_error_e cmn_textbox_set_password(cmn_textbox_t *textbox,
+                                                    int is_password);
+
+/**
  * @brief Gets the current text of a text box.
  * @param textbox The text box to query.
  * @param out_text Pointer to store the text string pointer.

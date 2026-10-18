@@ -46,7 +46,7 @@ TEST test_i18n_init(void) {
 #if defined(_MSC_VER)
     sprintf_s(key_buf, sizeof(key_buf), "k_%d", i);
 #else
-    snprintf(key_buf, sizeof(key_buf), "k_%d", i);
+    sprintf(key_buf, "k_%d", i);
 #endif
     ASSERT_EQ(CMN_SUCCESS, cmn_i18n_set(key_buf, "v"));
   }
@@ -63,8 +63,7 @@ TEST test_i18n_init(void) {
       n = sprintf_s(big_catalog + pos, sizeof(big_catalog) - pos,
                     "%s\"k%d\":\"v\"", i > 0 ? "," : "", i);
 #else
-      n = snprintf(big_catalog + pos, sizeof(big_catalog) - pos,
-                   "%s\"k%d\":\"v\"", i > 0 ? "," : "", i);
+      n = sprintf(big_catalog + pos, "%s\"k%d\":\"v\"", i > 0 ? "," : "", i);
 #endif
       pos += (size_t)n;
     }

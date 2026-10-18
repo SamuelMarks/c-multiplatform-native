@@ -27,7 +27,7 @@ TEST test_room_example_workflow(void) {
 
   ASSERT_EQ(CMN_ERR_INVAL, room_example_run(NULL));
 
-  for (i = 0; i < 5; ++i) {
+  for (i = 0; i < 12; ++i) {
     cmn_error_e rc;
     (void)cmn_mock_alloc_set(1, i);
     rc = room_example_run(&found_id);

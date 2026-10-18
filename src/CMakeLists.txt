@@ -8,6 +8,7 @@ set(CMN_SOURCES
     a11y_i18n.c
     automation.c
     widget.c
+    layout.c
     handle_map.c
     room.c
 )

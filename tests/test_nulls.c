@@ -5,6 +5,7 @@
 #include "cmn/app.h"
 #include "cmn/automation.h"
 #include "cmn/form.h"
+#include "cmn/layout.h"
 #include "cmn/memory.h"
 #include "cmn/router.h"
 #include "cmn/signals.h"
@@ -99,6 +100,7 @@ TEST run_test_nulls(void) {
   ASSERT_EQ(CMN_ERR_INVAL, cmn_textbox_create(NULL));
   ASSERT_EQ(CMN_ERR_INVAL, cmn_textbox_get_text(NULL, NULL));
   ASSERT_EQ(CMN_ERR_INVAL, cmn_textbox_set_text(NULL, NULL));
+  ASSERT_EQ(CMN_ERR_INVAL, cmn_textbox_set_password(NULL, 1));
   ASSERT_EQ(CMN_ERR_INVAL, cmn_textbox_destroy(NULL));
   {
     cmn_textbox_t *t = NULL;
@@ -225,6 +227,95 @@ TEST run_test_nulls(void) {
   /* dialogs */
   ASSERT_EQ(CMN_ERR_INVAL, cmn_dialog_show_modal(NULL, NULL));
   ASSERT_EQ(CMN_ERR_INVAL, cmn_message_box_show(NULL, NULL));
+
+  /* layout (flex, grid, bounds, window resize) */
+  ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_item_style_init(NULL));
+  ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_create(NULL));
+  ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_destroy(NULL));
+  {
+    cmn_flex_t *fl = NULL;
+    cmn_edges_t pad = {0, 0, 0, 0};
+    cmn_rect_t rect = {0, 0, 10, 10};
+    int gap = 0;
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_destroy(&fl));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_set_direction(NULL, CMN_FLEX_ROW));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_get_direction(NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_set_wrap(NULL, CMN_FLEX_NOWRAP));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_get_wrap(NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL,
+              cmn_flex_set_justify_content(NULL, CMN_JUSTIFY_FLEX_START));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_get_justify_content(NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_set_align_items(NULL, CMN_ALIGN_STRETCH));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_get_align_items(NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_set_gap(NULL, 0, 0));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_get_gap(NULL, NULL, NULL));
+    ASSERT_EQ(CMN_SUCCESS, cmn_flex_create(&fl));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_get_gap(fl, &gap, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_get_gap(fl, NULL, &gap));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_set_padding(NULL, pad));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_get_padding(NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_add_child(NULL, NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_add_child(fl, NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_set_child_style(NULL, NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_set_child_style(fl, NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_set_child_style(fl, fl, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_get_child_rect(NULL, NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_get_child_rect(fl, NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_get_child_rect(fl, fl, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_add_breakpoint(NULL, 400, CMN_FLEX_COLUMN,
+                                                     CMN_FLEX_NOWRAP));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_compute_layout(NULL, 100, 100));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_compute_layout(fl, -1, 100));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_compute_layout(fl, 100, -1));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_as_container(NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_flex_as_widget(NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_widget_set_bounds(NULL, rect));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_widget_get_bounds(NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_widget_get_bounds(fl, NULL));
+    ASSERT_EQ(CMN_SUCCESS, cmn_flex_destroy(&fl));
+  }
+
+  ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_item_style_init(NULL));
+  ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_create(NULL));
+  ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_destroy(NULL));
+  {
+    cmn_grid_t *gr = NULL;
+    cmn_edges_t pad = {0, 0, 0, 0};
+    int gap = 0;
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_destroy(&gr));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_set_columns(NULL, NULL, 0));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_set_rows(NULL, NULL, 0));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_set_auto_fit_columns(NULL, 100, 2));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_set_gap(NULL, 0, 0));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_get_gap(NULL, NULL, NULL));
+    ASSERT_EQ(CMN_SUCCESS, cmn_grid_create(&gr));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_get_gap(gr, &gap, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_get_gap(gr, NULL, &gap));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_set_padding(NULL, pad));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_get_padding(NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_add_child(NULL, NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_add_child(gr, NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_set_child_style(NULL, NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_set_child_style(gr, NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_set_child_style(gr, gr, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_get_child_rect(NULL, NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_get_child_rect(gr, NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_get_child_rect(gr, gr, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_add_breakpoint(NULL, 400, 1));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_get_effective_columns(NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_get_effective_columns(gr, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_compute_layout(NULL, 100, 100));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_compute_layout(gr, -1, 100));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_compute_layout(gr, 100, -1));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_as_container(NULL, NULL));
+    ASSERT_EQ(CMN_ERR_INVAL, cmn_grid_as_widget(NULL, NULL));
+    ASSERT_EQ(CMN_SUCCESS, cmn_grid_destroy(&gr));
+  }
+
+  ASSERT_EQ(CMN_ERR_INVAL, cmn_window_set_layout(NULL, NULL));
+  ASSERT_EQ(CMN_ERR_INVAL, cmn_window_set_size(NULL, 100, 100));
+  ASSERT_EQ(CMN_ERR_INVAL, cmn_window_get_size(NULL, NULL, NULL));
+  ASSERT_EQ(CMN_ERR_INVAL, cmn_window_set_on_resize(NULL, NULL, NULL));
 
   /* error.c */
   {

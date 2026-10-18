@@ -37,6 +37,7 @@ SUITE_EXTERN(form_suite);
 SUITE_EXTERN(handle_map_suite);
 SUITE_EXTERN(router_suite);
 SUITE_EXTERN(signals_suite);
+SUITE_EXTERN(layout_suite);
 
 /** @brief Greatest test framework main definitions. */
 GREATEST_MAIN_DEFS();
@@ -62,6 +63,7 @@ int main(int argc, char **argv) {
   RUN_SUITE(handle_map_suite);
   RUN_SUITE(router_suite);
   RUN_SUITE(signals_suite);
+  RUN_SUITE(layout_suite);
 
   GREATEST_MAIN_END();
 }

@@ -542,6 +542,24 @@ cmn_error_e cmn_textbox_set_text(cmn_textbox_t *textbox, const char *text) {
 }
 
 /**
+ * @brief Configures whether a text box masks its characters using UIKit
+ * `secureTextEntry`.
+ * @param textbox The text box to modify.
+ * @param is_password Non-zero (`cmn_true`) to enable password masking, `0`
+ * (`cmn_false`) for plain text.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_textbox_set_password(cmn_textbox_t *textbox, int is_password) {
+  if (textbox == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  @autoreleasepool {
+    textbox->ui_textfield.secureTextEntry = is_password ? YES : NO;
+  }
+  return CMN_SUCCESS;
+}
+
+/**
  * @brief Destroys a text box and frees its memory.
  * @param textbox Pointer to the text box pointer to destroy.
  * @return CMN_SUCCESS on success, error code otherwise.
@@ -725,6 +743,9 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
       parent_view = ((cmn_hbox_t *)parent)->ui_stackview;
       is_stack_parent = YES;
       break;
+    case CMN_WIDGET_KIND_FLEX:
+    case CMN_WIDGET_KIND_GRID:
+      break;
     default:
       return CMN_ERR_INVAL;
     }
@@ -747,6 +768,9 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
       break;
     case CMN_WIDGET_KIND_HBOX:
       child_view = ((cmn_hbox_t *)child)->ui_stackview;
+      break;
+    case CMN_WIDGET_KIND_FLEX:
+    case CMN_WIDGET_KIND_GRID:
       break;
     default:
       return CMN_ERR_INVAL;

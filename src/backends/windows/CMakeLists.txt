@@ -7,6 +7,8 @@ if(WIN32)
     target_link_libraries(cmn
         PRIVATE
             user32
+            gdi32
+            comctl32
             ole32
     )
 endif()

@@ -9,6 +9,7 @@ extern "C" {
 #include <cmn/error.h>
 #include "app_state.h"
 #include <cmn/form.h>
+#include <cmn/layout.h>
 #include <cmn/widget.h>
 /* clang-format on */
 
@@ -41,7 +42,7 @@ typedef struct {
   cmn_textbox_t *tb_username; /**< Username textbox. */
   cmn_textbox_t *tb_password; /**< Password textbox. */
   cmn_button_t *btn_submit;   /**< Submit button. */
-  cmn_vbox_t *root;           /**< Root layout. */
+  cmn_grid_t *root;           /**< Root responsive CSS Grid layout. */
 } login_view_data_t;
 
 /** @brief Active login view data instance. */

@@ -157,7 +157,7 @@ cmn_error_e cmn_window_create(cmn_app_t *app, cmn_window_t **out_window) {
                               destroy_window_adapter);
 
   @autoreleasepool {
-    NSRect frame = NSMakeRect(0, 0, 800, 600);
+    NSRect frame = NSMakeRect(0, 0, 480, 340);
     NSUInteger styleMask = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                            NSWindowStyleMaskResizable |
                            NSWindowStyleMaskMiniaturizable;
@@ -333,6 +333,86 @@ cmn_error_e cmn_window_get_dpi_scale(cmn_window_t *window, float *out_scale) {
 }
 
 /**
+ * @brief Recursively attaches and positions child native `NSView` instances
+ * inside `content_view` according to the computed Flexbox (`cmn_flex_t`) or
+ * Grid (`cmn_grid_t`) layout hierarchy.
+ * @param content_view The target window's content `NSView`.
+ * @param win_height Total content height used to flip top-left Y to AppKit Y.
+ * @param node Current layout container or leaf widget pointer.
+ * @param offset_x Cumulative horizontal offset from window origin.
+ * @param offset_y Cumulative vertical offset from window top-left origin.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+static cmn_error_e macos_apply_layout_tree(NSView *content_view, int win_height,
+                                           void *node, int offset_x,
+                                           int offset_y) {
+  cmn_widget_kind_e kind = CMN_WIDGET_KIND_NONE;
+  size_t i;
+  cmn_error_e rc;
+
+  if (content_view == nil || node == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  rc = cmn_widget_get_kind(node, &kind);
+  if (rc != CMN_SUCCESS) {
+    return rc;
+  }
+
+  if (kind == CMN_WIDGET_KIND_FLEX) {
+    cmn_flex_t *flex = (cmn_flex_t *)node;
+    for (i = 0; i < flex->child_count; ++i) {
+      cmn_rect_t r = flex->children[i].computed_rect;
+      rc = macos_apply_layout_tree(content_view, win_height,
+                                   flex->children[i].widget, offset_x + r.x,
+                                   offset_y + r.y);
+    }
+    return rc;
+  } else if (kind == CMN_WIDGET_KIND_GRID) {
+    cmn_grid_t *grid = (cmn_grid_t *)node;
+    for (i = 0; i < grid->child_count; ++i) {
+      cmn_rect_t r = grid->children[i].computed_rect;
+      rc = macos_apply_layout_tree(content_view, win_height,
+                                   grid->children[i].widget, offset_x + r.x,
+                                   offset_y + r.y);
+    }
+    return rc;
+  } else {
+    NSView *child_view = nil;
+    cmn_rect_t r = ((cmn_widget_header_t *)node)->bounds;
+    int w = (r.width > 0) ? r.width : 200;
+    int h = (r.height > 0) ? r.height
+                           : (kind == CMN_WIDGET_KIND_TEXTVIEW ? 140 : 28);
+    int flipped_y = win_height - offset_y - h;
+
+    switch (kind) {
+    case CMN_WIDGET_KIND_BUTTON:
+      child_view = ((cmn_button_t *)node)->ns_button;
+      break;
+    case CMN_WIDGET_KIND_LABEL:
+      child_view = ((cmn_label_t *)node)->ns_label;
+      break;
+    case CMN_WIDGET_KIND_TEXTBOX:
+      child_view = ((cmn_textbox_t *)node)->ns_textbox;
+      break;
+    case CMN_WIDGET_KIND_TEXTVIEW:
+      child_view = ((cmn_textview_t *)node)->ns_scrollview;
+      break;
+    default:
+      break;
+    }
+
+    if (child_view != nil) {
+      [child_view removeFromSuperview];
+      [child_view setTranslatesAutoresizingMaskIntoConstraints:YES];
+      [child_view setFrame:NSMakeRect((CGFloat)offset_x, (CGFloat)flipped_y,
+                                      (CGFloat)w, (CGFloat)h)];
+      [content_view addSubview:child_view];
+    }
+  }
+  return CMN_SUCCESS;
+}
+
+/**
  * @brief Shows a window on the screen.
  * @param window The window to show.
  * @return CMN_SUCCESS on success, error code otherwise.
@@ -342,6 +422,18 @@ cmn_error_e cmn_window_show(cmn_window_t *window) {
     return CMN_ERR_INVAL;
   }
   @autoreleasepool {
+    if (window->base.layout_root != NULL) {
+      NSView *cv;
+      int win_w =
+          (window->base.bounds.width > 0) ? window->base.bounds.width : 480;
+      int win_h =
+          (window->base.bounds.height > 0) ? window->base.bounds.height : 360;
+      [window->ns_window
+          setContentSize:NSMakeSize((CGFloat)win_w, (CGFloat)win_h)];
+      cv = [window->ns_window contentView];
+      (void)macos_apply_layout_tree(cv, win_h, window->base.layout_root, 0, 0);
+    }
+    [NSApp activateIgnoringOtherApps:YES];
     [window->ns_window makeKeyAndOrderFront:nil];
   }
   return CMN_SUCCESS;
@@ -449,6 +541,9 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
       parent_view = ((cmn_hbox_t *)parent)->ns_stack;
       is_stack_parent = YES;
       break;
+    case CMN_WIDGET_KIND_FLEX:
+    case CMN_WIDGET_KIND_GRID:
+      break;
     default:
       return CMN_ERR_INVAL;
     }
@@ -472,14 +567,55 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
     case CMN_WIDGET_KIND_HBOX:
       child_view = ((cmn_hbox_t *)child)->ns_stack;
       break;
+    case CMN_WIDGET_KIND_FLEX:
+    case CMN_WIDGET_KIND_GRID:
+      break;
     default:
       return CMN_ERR_INVAL;
     }
 
+    if (parent_view == nil || child_view == nil) {
+      return CMN_SUCCESS;
+    }
     [child_view removeFromSuperview];
     if (is_stack_parent) {
+      if (child_kind == CMN_WIDGET_KIND_TEXTBOX) {
+        [child_view
+            addConstraint:
+                [NSLayoutConstraint
+                    constraintWithItem:child_view
+                             attribute:NSLayoutAttributeWidth
+                             relatedBy:NSLayoutRelationGreaterThanOrEqual
+                                toItem:nil
+                             attribute:NSLayoutAttributeNotAnAttribute
+                            multiplier:1.0
+                              constant:280.0]];
+      } else if (child_kind == CMN_WIDGET_KIND_TEXTVIEW) {
+        [child_view
+            addConstraint:
+                [NSLayoutConstraint
+                    constraintWithItem:child_view
+                             attribute:NSLayoutAttributeWidth
+                             relatedBy:NSLayoutRelationGreaterThanOrEqual
+                                toItem:nil
+                             attribute:NSLayoutAttributeNotAnAttribute
+                            multiplier:1.0
+                              constant:360.0]];
+        [child_view
+            addConstraint:
+                [NSLayoutConstraint
+                    constraintWithItem:child_view
+                             attribute:NSLayoutAttributeHeight
+                             relatedBy:NSLayoutRelationGreaterThanOrEqual
+                                toItem:nil
+                             attribute:NSLayoutAttributeNotAnAttribute
+                            multiplier:1.0
+                              constant:140.0]];
+      }
       [(NSStackView *)parent_view addArrangedSubview:child_view];
     } else {
+      [child_view setFrame:[parent_view bounds]];
+      [child_view setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
       [parent_view addSubview:child_view];
     }
   }
@@ -711,6 +847,68 @@ cmn_error_e cmn_textbox_set_text(cmn_textbox_t *textbox, const char *text) {
 }
 
 /**
+ * @brief Configures whether a text box masks its characters using
+ * `NSSecureTextField`.
+ * @param textbox The text box to modify.
+ * @param is_password Non-zero (`cmn_true`) to enable password masking, `0`
+ * (`cmn_false`) for plain text.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_textbox_set_password(cmn_textbox_t *textbox, int is_password) {
+  if (textbox == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  @autoreleasepool {
+    NSTextField *old_field = textbox->ns_textbox;
+    NSString *val = [old_field stringValue];
+    NSView *superview = [old_field superview];
+    NSTextField *new_field = nil;
+
+    if (is_password) {
+      new_field = [[NSSecureTextField alloc] initWithFrame:[old_field frame]];
+    } else {
+      new_field = [NSTextField textFieldWithString:@""];
+      [new_field setFrame:[old_field frame]];
+    }
+    [new_field setBezeled:YES];
+    [new_field setBezelStyle:NSTextFieldSquareBezel];
+    [new_field setEditable:YES];
+    [new_field setSelectable:YES];
+    [new_field setStringValue:val ? val : @""];
+
+    (void)cmn_handle_map_remove((__bridge void *)old_field);
+    if (superview != nil) {
+      if ([superview isKindOfClass:[NSStackView class]]) {
+        NSStackView *stack = (NSStackView *)superview;
+        NSArray<NSView *> *arranged = [stack arrangedSubviews];
+        NSUInteger idx = [arranged indexOfObject:old_field];
+        [old_field removeFromSuperview];
+        [new_field addConstraint:
+                       [NSLayoutConstraint
+                           constraintWithItem:new_field
+                                    attribute:NSLayoutAttributeWidth
+                                    relatedBy:NSLayoutRelationGreaterThanOrEqual
+                                       toItem:nil
+                                    attribute:NSLayoutAttributeNotAnAttribute
+                                   multiplier:1.0
+                                     constant:280.0]];
+        if (idx != NSNotFound) {
+          [stack insertArrangedSubview:new_field atIndex:idx];
+        } else {
+          [stack addArrangedSubview:new_field];
+        }
+      } else {
+        [old_field removeFromSuperview];
+        [superview addSubview:new_field];
+      }
+    }
+    textbox->ns_textbox = new_field;
+    (void)cmn_handle_map_add((__bridge void *)new_field, textbox);
+  }
+  return CMN_SUCCESS;
+}
+
+/**
  * @brief Gets the current text of a text box.
  * @param textbox The text box to query.
  * @param out_text Pointer to store the text string pointer.
@@ -793,6 +991,7 @@ cmn_error_e cmn_textview_create(cmn_textview_t **out_textview) {
     [tv->ns_scrollview setHasVerticalScroller:YES];
     [tv->ns_scrollview setHasHorizontalScroller:YES];
     [tv->ns_scrollview setAutohidesScrollers:YES];
+    [tv->ns_scrollview setBorderType:NSBezelBorder];
 
     NSSize contentSize = [tv->ns_scrollview contentSize];
     tv->ns_textview = [[NSTextView alloc]
@@ -806,6 +1005,7 @@ cmn_error_e cmn_textview_create(cmn_textview_t **out_textview) {
         setContainerSize:NSMakeSize(contentSize.width, FLT_MAX)];
     [[tv->ns_textview textContainer] setWidthTracksTextView:YES];
     [tv->ns_textview setEditable:NO];
+    [tv->ns_textview setTextColor:[NSColor labelColor]];
 
     [tv->ns_scrollview setDocumentView:tv->ns_textview];
     rc = cmn_handle_map_add((__bridge void *)tv->ns_scrollview, tv);
@@ -843,8 +1043,13 @@ cmn_error_e cmn_textview_append_text(cmn_textview_t *textview,
     return CMN_ERR_INVAL;
   }
   @autoreleasepool {
+    NSDictionary *attrs = @{
+      NSForegroundColorAttributeName : [NSColor labelColor],
+      NSFontAttributeName : [NSFont systemFontOfSize:13.0]
+    };
     NSAttributedString *attrString = [[NSAttributedString alloc]
-        initWithString:[NSString stringWithUTF8String:text]];
+        initWithString:[NSString stringWithUTF8String:text]
+            attributes:attrs];
     [[textview->ns_textview textStorage] appendAttributedString:attrString];
     [textview->ns_textview
         scrollRangeToVisible:NSMakeRange(
@@ -911,14 +1116,29 @@ cmn_error_e cmn_automation_capture_screenshot(cmn_window_t *win,
   }
 
   @autoreleasepool {
-    NSView *view = [win->ns_window contentView];
-    NSRect bounds = [view bounds];
-    NSBitmapImageRep *rep = [view bitmapImageRepForCachingDisplayInRect:bounds];
-    [view cacheDisplayInRect:bounds toBitmapImageRep:rep];
-    NSData *pngData = [rep representationUsingType:NSBitmapImageFileTypePNG
-                                        properties:@{}];
-    NSString *path = [NSString stringWithUTF8String:out_filepath];
-    BOOL written = [pngData writeToFile:path atomically:YES];
+    NSView *content_view = [win->ns_window contentView];
+    NSView *capture_view = [content_view superview];
+    NSRect bounds;
+    NSBitmapImageRep *rep;
+    NSData *pngData;
+    NSString *path;
+    BOOL written;
+
+    if (capture_view == nil) {
+      capture_view = content_view;
+    }
+    [win->ns_window makeFirstResponder:nil];
+    [win->ns_window displayIfNeeded];
+    [capture_view layoutSubtreeIfNeeded];
+    [capture_view displayIfNeeded];
+
+    bounds = [capture_view bounds];
+    rep = [capture_view bitmapImageRepForCachingDisplayInRect:bounds];
+    [capture_view cacheDisplayInRect:bounds toBitmapImageRep:rep];
+    pngData = [rep representationUsingType:NSBitmapImageFileTypePNG
+                                properties:@{}];
+    path = [NSString stringWithUTF8String:out_filepath];
+    written = [pngData writeToFile:path atomically:YES];
     if (!written) {
       return CMN_ERR_IO;
     }
@@ -950,9 +1170,11 @@ cmn_error_e cmn_vbox_create(cmn_vbox_t **out_vbox) {
                               destroy_vbox_adapter);
 
   @autoreleasepool {
-    vbox->ns_stack = [[NSStackView alloc] init];
+    vbox->ns_stack =
+        [[NSStackView alloc] initWithFrame:NSMakeRect(0, 0, 480, 340)];
     [vbox->ns_stack setOrientation:NSUserInterfaceLayoutOrientationVertical];
-    [vbox->ns_stack setSpacing:10.0];
+    [vbox->ns_stack setSpacing:12.0];
+    [vbox->ns_stack setEdgeInsets:NSEdgeInsetsMake(20.0, 24.0, 20.0, 24.0)];
     [vbox->ns_stack setAlignment:NSLayoutAttributeCenterX];
     rc = cmn_handle_map_add((__bridge void *)vbox->ns_stack, vbox);
   }

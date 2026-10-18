@@ -153,12 +153,14 @@ static LRESULT CALLBACK cmn_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam,
         }
       }
     }
-  } else if (msg == WM_DESTROY) {
-    PostQuitMessage(0);
-    return 0;
   }
   return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
+
+/** @brief Hidden owner window for initially unparented WS_CHILD controls. */
+static HWND g_win32_parking_hwnd = NULL;
+/** @brief Cached Win32 UI font (Segoe UI) applied to native controls. */
+static HFONT g_win32_ui_font = NULL;
 
 /**
  * @brief Registers the custom Win32 window class once per process.
@@ -168,13 +170,41 @@ static cmn_error_e register_window_class(void) {
   static int registered = 0;
   if (!registered) {
     WNDCLASSEXW wc = {0};
+    NONCLIENTMETRICSW ncm;
+    ACTCTXW actx;
+    WCHAR sys_dir[MAX_PATH];
+    HANDLE hActCtx;
+    ULONG_PTR cookie = 0;
+    memset(&actx, 0, sizeof(actx));
+    actx.cbSize = sizeof(actx);
+    if (GetSystemDirectoryW(sys_dir, MAX_PATH) > 0) {
+      actx.dwFlags = ACTCTX_FLAG_RESOURCE_NAME_VALID |
+                     ACTCTX_FLAG_SET_PROCESS_DEFAULT |
+                     ACTCTX_FLAG_ASSEMBLY_DIRECTORY_VALID;
+      actx.lpSource = L"shell32.dll";
+      actx.lpAssemblyDirectory = sys_dir;
+      actx.lpResourceName = MAKEINTRESOURCEW(124);
+      hActCtx = CreateActCtxW(&actx);
+      if (hActCtx != INVALID_HANDLE_VALUE) {
+        (void)ActivateActCtx(hActCtx, &cookie);
+      }
+    }
+    InitCommonControls();
+    memset(&ncm, 0, sizeof(ncm));
+    ncm.cbSize = sizeof(ncm);
+    if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0)) {
+      g_win32_ui_font = CreateFontIndirectW(&ncm.lfMessageFont);
+    }
     wc.cbSize = sizeof(WNDCLASSEXW);
     wc.lpfnWndProc = cmn_wnd_proc;
     wc.hInstance = GetModuleHandle(NULL);
     wc.lpszClassName = CMN_WND_CLASS;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
     RegisterClassExW(&wc);
+    g_win32_parking_hwnd =
+        CreateWindowExW(0, CMN_WND_CLASS, L"CmnParking", WS_OVERLAPPEDWINDOW, 0,
+                        0, 100, 100, NULL, NULL, GetModuleHandle(NULL), NULL);
     registered = 1;
   }
   return CMN_SUCCESS;
@@ -207,6 +237,85 @@ static cmn_error_e utf16_to_utf8(const WCHAR *utf16, char *utf8,
 }
 
 /**
+ * @brief Computes the CRC32 checksum over a byte buffer for PNG chunks.
+ * @param data Input byte buffer.
+ * @param len Number of bytes.
+ * @param out_crc Pointer to store the computed 32-bit CRC.
+ * @return CMN_SUCCESS on success.
+ */
+static cmn_error_e win32_crc32(const unsigned char *data, size_t len,
+                               uint32_t *out_crc) {
+  uint32_t crc = 0xFFFFFFFFu;
+  size_t i;
+  int bit;
+
+  for (i = 0; i < len; ++i) {
+    crc ^= (uint32_t)data[i];
+    for (bit = 0; bit < 8; ++bit) {
+      if ((crc & 1u) != 0) {
+        crc = (crc >> 1) ^ 0xEDB88320u;
+      } else {
+        crc >>= 1;
+      }
+    }
+  }
+  *out_crc = crc ^ 0xFFFFFFFFu;
+  return CMN_SUCCESS;
+}
+
+/**
+ * @brief Writes a 32-bit unsigned integer in big-endian byte order.
+ * @param buf 4-byte output buffer.
+ * @param val 32-bit value.
+ * @return CMN_SUCCESS on success.
+ */
+static cmn_error_e win32_be32(unsigned char *buf, uint32_t val) {
+  buf[0] = (unsigned char)((val >> 24) & 0xFFu);
+  buf[1] = (unsigned char)((val >> 16) & 0xFFu);
+  buf[2] = (unsigned char)((val >> 8) & 0xFFu);
+  buf[3] = (unsigned char)(val & 0xFFu);
+  return CMN_SUCCESS;
+}
+
+/**
+ * @brief Writes a single PNG chunk to a Win32 file handle.
+ * @param hFile Open Win32 file handle.
+ * @param type 4-byte chunk type.
+ * @param data Chunk payload.
+ * @param len Payload length in bytes.
+ * @return CMN_SUCCESS on success.
+ */
+static cmn_error_e win32_write_png_chunk(HANDLE hFile, const char type[4],
+                                         const unsigned char *data,
+                                         uint32_t len) {
+  unsigned char len_buf[4];
+  unsigned char crc_buf[4];
+  unsigned char *crc_input = NULL;
+  uint32_t crc = 0;
+  DWORD written = 0;
+
+  (void)win32_be32(len_buf, len);
+  WriteFile(hFile, len_buf, 4, &written, NULL);
+
+  if (cmn_malloc((size_t)len + 4u, (void **)&crc_input) == CMN_SUCCESS) {
+    memcpy(crc_input, type, 4);
+    if (len > 0 && data != NULL) {
+      memcpy(crc_input + 4, data, (size_t)len);
+    }
+    (void)win32_crc32(crc_input, (size_t)len + 4u, &crc);
+    (void)cmn_free((void **)&crc_input);
+  }
+
+  WriteFile(hFile, type, 4, &written, NULL);
+  if (len > 0 && data != NULL) {
+    WriteFile(hFile, data, len, &written, NULL);
+  }
+  (void)win32_be32(crc_buf, crc);
+  WriteFile(hFile, crc_buf, 4, &written, NULL);
+  return CMN_SUCCESS;
+}
+
+/**
  * @brief Captures a screenshot of a window and saves it to a file.
  * @param win The window to capture.
  * @param out_filepath The destination file path for the screenshot.
@@ -214,6 +323,7 @@ static cmn_error_e utf16_to_utf8(const WCHAR *utf16, char *utf8,
  */
 cmn_error_e cmn_automation_capture_screenshot(cmn_window_t *win,
                                               const char *out_filepath) {
+  static const unsigned char png_sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
   HDC hWindowDC;
   HDC hMemoryDC;
   HBITMAP hBitmap;
@@ -223,33 +333,109 @@ cmn_error_e cmn_automation_capture_screenshot(cmn_window_t *win,
   DWORD dwBmpSize;
   HANDLE hFile;
   DWORD dwBytesWritten;
-  char *lpbitmap;
-  BITMAPFILEHEADER bmfHeader;
+  unsigned char *lpbitmap = NULL;
+  unsigned char *raw_scanlines = NULL;
+  unsigned char *zlib_stream = NULL;
+  unsigned char ihdr[13];
+  size_t row_bytes;
+  size_t raw_size;
+  size_t num_blocks;
+  size_t zlib_size;
+  size_t offset;
+  size_t zpos;
+  uint32_t s1 = 1u;
+  uint32_t s2 = 0u;
+  uint32_t adler;
+  int y;
+  int x;
+  size_t i;
+  MSG msg;
   WCHAR wpath[1024];
 
   if (win == NULL || out_filepath == NULL || out_filepath[0] == '\0') {
     return CMN_ERR_INVAL;
   }
 
+  ShowWindow(win->hwnd, SW_SHOWNORMAL);
+  SetForegroundWindow(win->hwnd);
+  BringWindowToTop(win->hwnd);
+  UpdateWindow(win->hwnd);
+  RedrawWindow(win->hwnd, NULL, NULL,
+               RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN |
+                   RDW_FRAME);
+  while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
+    TranslateMessage(&msg);
+    DispatchMessageW(&msg);
+  }
+  RedrawWindow(win->hwnd, NULL, NULL,
+               RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN |
+                   RDW_FRAME);
+  UpdateWindow(win->hwnd);
+  while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
+    TranslateMessage(&msg);
+    DispatchMessageW(&msg);
+  }
+
   GetWindowRect(win->hwnd, &rect);
+  if ((GetWindowLongPtrW(win->hwnd, GWL_STYLE) & WS_CAPTION) != 0 &&
+      (rect.right - rect.left) > 20 && (rect.bottom - rect.top) > 20) {
+    rect.left += 7;
+    rect.right -= 7;
+    rect.bottom -= 7;
+  }
   width = rect.right - rect.left;
   height = rect.bottom - rect.top;
 
   if (width <= 0 || height <= 0) {
-    width = 800;
-    height = 600;
+    width = 480;
+    height = 360;
   }
 
-  hWindowDC = GetWindowDC(win->hwnd);
+  hWindowDC = GetDC(NULL);
   hMemoryDC = CreateCompatibleDC(hWindowDC);
   hBitmap = CreateCompatibleBitmap(hWindowDC, width, height);
   SelectObject(hMemoryDC, hBitmap);
 
-  BitBlt(hMemoryDC, 0, 0, width, height, hWindowDC, 0, 0, SRCCOPY);
+  if (!BitBlt(hMemoryDC, 0, 0, width, height, hWindowDC, rect.left, rect.top,
+              SRCCOPY)) {
+    (void)PrintWindow(win->hwnd, hMemoryDC, 0);
+  }
+  {
+    POINT pt_client = {0, 0};
+    HWND hChild;
+    int save_dc;
+    if (ClientToScreen(win->hwnd, &pt_client)) {
+      RECT cli_rc;
+      GetClientRect(win->hwnd, &cli_rc);
+      save_dc = SaveDC(hMemoryDC);
+      SetViewportOrgEx(hMemoryDC, pt_client.x - rect.left,
+                       pt_client.y - rect.top, NULL);
+      FillRect(hMemoryDC, &cli_rc, (HBRUSH)(COLOR_BTNFACE + 1));
+      SendMessageW(win->hwnd, WM_PRINTCLIENT, (WPARAM)hMemoryDC,
+                   PRF_CLIENT | PRF_ERASEBKGND);
+      RestoreDC(hMemoryDC, save_dc);
+
+      hChild = GetWindow(win->hwnd, GW_CHILD);
+      while (hChild != NULL) {
+        if (IsWindowVisible(hChild)) {
+          RECT ch_rc;
+          GetWindowRect(hChild, &ch_rc);
+          save_dc = SaveDC(hMemoryDC);
+          SetViewportOrgEx(hMemoryDC, ch_rc.left - rect.left,
+                           ch_rc.top - rect.top, NULL);
+          SendMessageW(hChild, WM_PRINT, (WPARAM)hMemoryDC,
+                       PRF_NONCLIENT | PRF_CLIENT | PRF_ERASEBKGND |
+                           PRF_CHILDREN);
+          RestoreDC(hMemoryDC, save_dc);
+        }
+        hChild = GetWindow(hChild, GW_HWNDNEXT);
+      }
+    }
+  }
 
   bi.biSize = sizeof(BITMAPINFOHEADER);
   bi.biWidth = width;
-  bi.biHeight = height;
+  bi.biHeight = -height;
   bi.biPlanes = 1;
   bi.biBitCount = 32;
   bi.biCompression = BI_RGB;
@@ -259,12 +445,12 @@ cmn_error_e cmn_automation_capture_screenshot(cmn_window_t *win,
   bi.biClrUsed = 0;
   bi.biClrImportant = 0;
 
-  dwBmpSize = ((width * bi.biBitCount + 31) / 32) * 4 * height;
+  dwBmpSize = (DWORD)(width * 4 * height);
 
   if (cmn_malloc(dwBmpSize, (void **)&lpbitmap) != CMN_SUCCESS) {
     DeleteObject(hBitmap);
     DeleteDC(hMemoryDC);
-    ReleaseDC(win->hwnd, hWindowDC);
+    ReleaseDC(NULL, hWindowDC);
     return CMN_ERR_NOMEM;
   }
 
@@ -278,28 +464,90 @@ cmn_error_e cmn_automation_capture_screenshot(cmn_window_t *win,
     (void)cmn_free((void **)&lpbitmap);
     DeleteObject(hBitmap);
     DeleteDC(hMemoryDC);
-    ReleaseDC(win->hwnd, hWindowDC);
+    ReleaseDC(NULL, hWindowDC);
     return CMN_ERR_IO;
   }
 
-  bmfHeader.bfOffBits =
-      (DWORD)sizeof(BITMAPFILEHEADER) + (DWORD)sizeof(BITMAPINFOHEADER);
-  bmfHeader.bfSize =
-      dwBmpSize + sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
-  bmfHeader.bfType = 0x4D42;
-  bmfHeader.bfReserved1 = 0;
-  bmfHeader.bfReserved2 = 0;
+  row_bytes = (size_t)width * 4u + 1u;
+  raw_size = row_bytes * (size_t)height;
+  num_blocks = (raw_size + 65534u) / 65535u;
+  zlib_size = 2u + num_blocks * 5u + raw_size + 4u;
 
-  WriteFile(hFile, (LPSTR)&bmfHeader, sizeof(BITMAPFILEHEADER), &dwBytesWritten,
-            NULL);
-  WriteFile(hFile, (LPSTR)&bi, sizeof(BITMAPINFOHEADER), &dwBytesWritten, NULL);
-  WriteFile(hFile, (LPSTR)lpbitmap, dwBmpSize, &dwBytesWritten, NULL);
+  if (cmn_malloc(raw_size, (void **)&raw_scanlines) == CMN_SUCCESS &&
+      cmn_malloc(zlib_size, (void **)&zlib_stream) == CMN_SUCCESS) {
+    for (y = 0; y < height; ++y) {
+      size_t dst_off = (size_t)y * row_bytes;
+      size_t src_off = (size_t)y * (size_t)width * 4u;
+      raw_scanlines[dst_off] = 0;
+      for (x = 0; x < width; ++x) {
+        size_t px = src_off + (size_t)x * 4u;
+        size_t dx = dst_off + 1u + (size_t)x * 4u;
+        raw_scanlines[dx + 0] = lpbitmap[px + 2];
+        raw_scanlines[dx + 1] = lpbitmap[px + 1];
+        raw_scanlines[dx + 2] = lpbitmap[px + 0];
+        raw_scanlines[dx + 3] = 255u;
+      }
+    }
 
+    for (i = 0; i < raw_size; ++i) {
+      s1 = (s1 + raw_scanlines[i]) % 65521u;
+      s2 = (s2 + s1) % 65521u;
+    }
+    adler = (s2 << 16) | s1;
+
+    zlib_stream[0] = 0x78u;
+    zlib_stream[1] = 0x01u;
+    zpos = 2u;
+    offset = 0u;
+    while (offset < raw_size) {
+      size_t chunk = raw_size - offset;
+      unsigned char bfinal = 0u;
+      uint16_t len16;
+      uint16_t nlen16;
+      if (chunk > 65535u) {
+        chunk = 65535u;
+      }
+      if (offset + chunk >= raw_size) {
+        bfinal = 1u;
+      }
+      len16 = (uint16_t)chunk;
+      nlen16 = (uint16_t)(~len16);
+      zlib_stream[zpos++] = bfinal;
+      zlib_stream[zpos++] = (unsigned char)(len16 & 0xFFu);
+      zlib_stream[zpos++] = (unsigned char)((len16 >> 8) & 0xFFu);
+      zlib_stream[zpos++] = (unsigned char)(nlen16 & 0xFFu);
+      zlib_stream[zpos++] = (unsigned char)((nlen16 >> 8) & 0xFFu);
+      memcpy(zlib_stream + zpos, raw_scanlines + offset, chunk);
+      zpos += chunk;
+      offset += chunk;
+    }
+    (void)win32_be32(zlib_stream + zpos, adler);
+    zpos += 4u;
+
+    WriteFile(hFile, png_sig, 8, &dwBytesWritten, NULL);
+    (void)win32_be32(ihdr, (uint32_t)width);
+    (void)win32_be32(ihdr + 4, (uint32_t)height);
+    ihdr[8] = 8u;
+    ihdr[9] = 6u;
+    ihdr[10] = 0u;
+    ihdr[11] = 0u;
+    ihdr[12] = 0u;
+    (void)win32_write_png_chunk(hFile, "IHDR", ihdr, 13u);
+    (void)win32_write_png_chunk(hFile, "IDAT", zlib_stream, (uint32_t)zpos);
+    (void)win32_write_png_chunk(hFile, "IEND", NULL, 0u);
+  }
+
+  if (zlib_stream != NULL) {
+    (void)cmn_free((void **)&zlib_stream);
+  }
+  if (raw_scanlines != NULL) {
+    (void)cmn_free((void **)&raw_scanlines);
+  }
   CloseHandle(hFile);
   (void)cmn_free((void **)&lpbitmap);
   DeleteObject(hBitmap);
   DeleteDC(hMemoryDC);
-  ReleaseDC(win->hwnd, hWindowDC);
+  ReleaseDC(NULL, hWindowDC);
 
   return CMN_SUCCESS;
 }
@@ -330,9 +578,9 @@ cmn_error_e cmn_window_create(cmn_app_t *app, cmn_window_t **out_window) {
   }
   rc = register_window_class();
 
-  win->hwnd = CreateWindowExW(0, CMN_WND_CLASS, L"", WS_OVERLAPPEDWINDOW,
-                              CW_USEDEFAULT, CW_USEDEFAULT, 800, 600, NULL,
-                              NULL, GetModuleHandle(NULL), NULL);
+  win->hwnd =
+      CreateWindowExW(0, CMN_WND_CLASS, L"", WS_OVERLAPPEDWINDOW, 120, 90, 480,
+                      360, NULL, NULL, GetModuleHandle(NULL), NULL);
   if (rc != CMN_SUCCESS) {
     return rc;
   }
@@ -359,6 +607,87 @@ cmn_error_e cmn_window_set_title(cmn_window_t *window, const char *title) {
 }
 
 /**
+ * @brief Recursively attaches and positions child native `HWND` controls inside
+ * `hWin` according to the computed Flexbox (`cmn_flex_t`) or Grid
+ * (`cmn_grid_t`) layout hierarchy.
+ * @param hWin The target parent window `HWND`.
+ * @param node Current layout container or leaf widget pointer.
+ * @param offset_x Cumulative horizontal offset from window client origin.
+ * @param offset_y Cumulative vertical offset from window client origin.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+static cmn_error_e win32_apply_layout_tree(HWND hWin, void *node, int offset_x,
+                                           int offset_y) {
+  cmn_widget_kind_e kind = CMN_WIDGET_KIND_NONE;
+  size_t i;
+  cmn_error_e rc;
+
+  if (hWin == NULL || node == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  rc = cmn_widget_get_kind(node, &kind);
+  if (rc != CMN_SUCCESS) {
+    return rc;
+  }
+
+  if (kind == CMN_WIDGET_KIND_FLEX) {
+    cmn_flex_t *flex = (cmn_flex_t *)node;
+    for (i = 0; i < flex->child_count; ++i) {
+      cmn_rect_t r = flex->children[i].computed_rect;
+      rc = win32_apply_layout_tree(hWin, flex->children[i].widget,
+                                   offset_x + r.x, offset_y + r.y);
+    }
+    return rc;
+  } else if (kind == CMN_WIDGET_KIND_GRID) {
+    cmn_grid_t *grid = (cmn_grid_t *)node;
+    for (i = 0; i < grid->child_count; ++i) {
+      cmn_rect_t r = grid->children[i].computed_rect;
+      rc = win32_apply_layout_tree(hWin, grid->children[i].widget,
+                                   offset_x + r.x, offset_y + r.y);
+    }
+    return rc;
+  } else {
+    HWND hChild = NULL;
+    cmn_rect_t r = ((cmn_widget_header_t *)node)->bounds;
+    int w = (r.width > 0) ? r.width : 200;
+    int h = (r.height > 0) ? r.height
+                           : (kind == CMN_WIDGET_KIND_TEXTVIEW ? 140 : 28);
+
+    switch (kind) {
+    case CMN_WIDGET_KIND_BUTTON:
+      hChild = ((cmn_button_t *)node)->hwnd;
+      break;
+    case CMN_WIDGET_KIND_LABEL:
+      hChild = ((cmn_label_t *)node)->hwnd;
+      break;
+    case CMN_WIDGET_KIND_TEXTBOX:
+      hChild = ((cmn_textbox_t *)node)->hwnd;
+      break;
+    case CMN_WIDGET_KIND_TEXTVIEW:
+      hChild = ((cmn_textview_t *)node)->hwnd;
+      break;
+    default:
+      break;
+    }
+
+    if (hChild != NULL) {
+      LONG_PTR style = GetWindowLongPtrW(hChild, GWL_STYLE);
+      style = (style & ~WS_POPUP) | WS_CHILD | WS_VISIBLE;
+      SetWindowLongPtrW(hChild, GWL_STYLE, style);
+      SetParent(hChild, hWin);
+      if (g_win32_ui_font != NULL) {
+        SendMessageW(hChild, WM_SETFONT, (WPARAM)g_win32_ui_font, TRUE);
+      }
+      SetWindowPos(hChild, NULL, offset_x, offset_y, w, h,
+                   SWP_NOZORDER | SWP_SHOWWINDOW | SWP_FRAMECHANGED);
+      InvalidateRect(hChild, NULL, TRUE);
+      UpdateWindow(hChild);
+    }
+  }
+  return CMN_SUCCESS;
+}
+
+/**
  * @brief Shows a window on the screen.
  * @param window The window to show.
  * @return CMN_SUCCESS on success, error code otherwise.
@@ -366,6 +695,23 @@ cmn_error_e cmn_window_set_title(cmn_window_t *window, const char *title) {
 cmn_error_e cmn_window_show(cmn_window_t *window) {
   if (window == NULL) {
     return CMN_ERR_INVAL;
+  }
+  if (window->base.layout_root != NULL) {
+    RECT wrc;
+    int win_w =
+        (window->base.bounds.width > 0) ? window->base.bounds.width : 480;
+    int win_h =
+        (window->base.bounds.height > 0) ? window->base.bounds.height : 360;
+    wrc.left = 0;
+    wrc.top = 0;
+    wrc.right = win_w;
+    wrc.bottom = win_h;
+    AdjustWindowRectEx(&wrc, (DWORD)GetWindowLongPtrW(window->hwnd, GWL_STYLE),
+                       FALSE,
+                       (DWORD)GetWindowLongPtrW(window->hwnd, GWL_EXSTYLE));
+    SetWindowPos(window->hwnd, NULL, 120, 90, wrc.right - wrc.left,
+                 wrc.bottom - wrc.top, SWP_NOZORDER);
+    (void)win32_apply_layout_tree(window->hwnd, window->base.layout_root, 0, 0);
   }
   ShowWindow(window->hwnd, SW_SHOW);
   return CMN_SUCCESS;
@@ -611,6 +957,9 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
     hParent = ((cmn_hbox_t *)parent)->hwnd;
     child_idx = ((cmn_hbox_t *)parent)->child_count++;
     break;
+  case CMN_WIDGET_KIND_FLEX:
+  case CMN_WIDGET_KIND_GRID:
+    break;
   default:
     return CMN_ERR_INVAL;
   }
@@ -634,12 +983,34 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
   case CMN_WIDGET_KIND_HBOX:
     hChild = ((cmn_hbox_t *)child)->hwnd;
     break;
+  case CMN_WIDGET_KIND_FLEX:
+  case CMN_WIDGET_KIND_GRID:
+    break;
   default:
     return CMN_ERR_INVAL;
   }
 
+  if (hParent == NULL || hChild == NULL) {
+    return CMN_SUCCESS;
+  }
   SetParent(hChild, hParent);
-  SetWindowPos(hChild, NULL, 10, 10 + (child_idx * 40), 200, 30, SWP_NOZORDER);
+  if (g_win32_ui_font != NULL) {
+    SendMessageW(hChild, WM_SETFONT, (WPARAM)g_win32_ui_font, TRUE);
+  }
+  if (child_kind == CMN_WIDGET_KIND_VBOX) {
+    SetWindowPos(hChild, NULL, 0, 0, 460, 320, SWP_NOZORDER);
+  } else if (child_kind == CMN_WIDGET_KIND_HBOX) {
+    SetWindowPos(hChild, NULL, 24, 16 + (child_idx * 42), 410, 36,
+                 SWP_NOZORDER);
+  } else if (child_kind == CMN_WIDGET_KIND_TEXTVIEW) {
+    SetWindowPos(hChild, NULL, 24, 16 + (child_idx * 42), 410, 130,
+                 SWP_NOZORDER);
+  } else if (parent_kind == CMN_WIDGET_KIND_HBOX) {
+    SetWindowPos(hChild, NULL, (child_idx * 210), 2, 198, 32, SWP_NOZORDER);
+  } else {
+    SetWindowPos(hChild, NULL, 24, 16 + (child_idx * 42), 410, 30,
+                 SWP_NOZORDER);
+  }
 
   return CMN_SUCCESS;
 }
@@ -677,9 +1048,11 @@ cmn_error_e cmn_button_create(cmn_button_t **out_button) {
   }
   btn->cmd_id = (slot >= 0) ? (100 + slot) : 0;
 
+  (void)register_window_class();
   btn->hwnd = CreateWindowExW(
       0, L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 100, 30,
-      NULL, (HMENU)(intptr_t)btn->cmd_id, GetModuleHandle(NULL), NULL);
+      g_win32_parking_hwnd, (HMENU)(intptr_t)btn->cmd_id, GetModuleHandle(NULL),
+      NULL);
   if (rc != CMN_SUCCESS) {
     return rc;
   }
@@ -777,9 +1150,10 @@ cmn_error_e cmn_label_create(cmn_label_t **out_label) {
   rc = cmn_widget_header_init(&lbl->base, CMN_WIDGET_KIND_LABEL,
                               destroy_label_adapter);
 
-  lbl->hwnd =
-      CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT, 0, 0,
-                      100, 30, NULL, NULL, GetModuleHandle(NULL), NULL);
+  (void)register_window_class();
+  lbl->hwnd = CreateWindowExW(
+      0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT, 0, 0, 100, 30,
+      g_win32_parking_hwnd, NULL, GetModuleHandle(NULL), NULL);
   if (rc != CMN_SUCCESS) {
     return rc;
   }
@@ -841,9 +1215,10 @@ cmn_error_e cmn_textbox_create(cmn_textbox_t **out_textbox) {
   rc = cmn_widget_header_init(&tb->base, CMN_WIDGET_KIND_TEXTBOX,
                               destroy_textbox_adapter);
 
+  (void)register_window_class();
   tb->hwnd = CreateWindowExW(
       0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 0, 0,
-      100, 30, NULL, NULL, GetModuleHandle(NULL), NULL);
+      100, 30, g_win32_parking_hwnd, NULL, GetModuleHandle(NULL), NULL);
   if (rc != CMN_SUCCESS) {
     return rc;
   }
@@ -872,6 +1247,33 @@ cmn_error_e cmn_textbox_set_text(cmn_textbox_t *textbox, const char *text) {
   rc = cmn_strcpy_s(textbox->text_cache, sizeof(textbox->text_cache), text);
   if (rc != CMN_SUCCESS) {
     return rc;
+  }
+  return CMN_SUCCESS;
+}
+
+/**
+ * @brief Configures whether a text box masks its characters using Win32
+ * `ES_PASSWORD` and `EM_SETPASSWORDCHAR`.
+ * @param textbox The text box to modify.
+ * @param is_password Non-zero (`cmn_true`) to enable password masking, `0`
+ * (`cmn_false`) for plain text.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_textbox_set_password(cmn_textbox_t *textbox, int is_password) {
+  LONG style;
+  if (textbox == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  if (textbox->hwnd) {
+    style = GetWindowLongW(textbox->hwnd, GWL_STYLE);
+    if (is_password) {
+      SetWindowLongW(textbox->hwnd, GWL_STYLE, style | ES_PASSWORD);
+      SendMessageW(textbox->hwnd, EM_SETPASSWORDCHAR, (WPARAM)0x25CF, 0);
+    } else {
+      SetWindowLongW(textbox->hwnd, GWL_STYLE, style & ~ES_PASSWORD);
+      SendMessageW(textbox->hwnd, EM_SETPASSWORDCHAR, 0, 0);
+    }
+    InvalidateRect(textbox->hwnd, NULL, TRUE);
   }
   return CMN_SUCCESS;
 }
@@ -952,11 +1354,12 @@ cmn_error_e cmn_textview_create(cmn_textview_t **out_textview) {
   rc = cmn_widget_header_init(&tv->base, CMN_WIDGET_KIND_TEXTVIEW,
                               destroy_textview_adapter);
 
-  tv->hwnd = CreateWindowExW(
-      0, L"EDIT", L"",
-      WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | WS_VSCROLL |
-          WS_HSCROLL | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_READONLY,
-      0, 0, 100, 100, NULL, NULL, GetModuleHandle(NULL), NULL);
+  (void)register_window_class();
+  tv->hwnd = CreateWindowExW(0, L"EDIT", L"",
+                             WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE |
+                                 WS_VSCROLL | ES_AUTOVSCROLL | ES_READONLY,
+                             0, 0, 100, 100, g_win32_parking_hwnd, NULL,
+                             GetModuleHandle(NULL), NULL);
   if (rc != CMN_SUCCESS) {
     return rc;
   }
@@ -998,8 +1401,11 @@ cmn_error_e cmn_textview_set_text(cmn_textview_t *textview, const char *text) {
 cmn_error_e cmn_textview_append_text(cmn_textview_t *textview,
                                      const char *text) {
   WCHAR wtext[4096];
+  char crlf_buf[4096];
   size_t cur_len;
   size_t add_len;
+  size_t i;
+  size_t j = 0;
   if (textview == NULL || text == NULL) {
     return CMN_ERR_INVAL;
   }
@@ -1011,7 +1417,17 @@ cmn_error_e cmn_textview_append_text(cmn_textview_t *textview,
                        sizeof(textview->text_cache) - cur_len, text);
   }
 
-  (void)utf8_to_utf16(textview->text_cache, wtext, 4096);
+  for (i = 0; textview->text_cache[i] != '\0' && j + 2 < sizeof(crlf_buf);
+       ++i) {
+    if (textview->text_cache[i] == '\n' &&
+        (i == 0 || textview->text_cache[i - 1] != '\r')) {
+      crlf_buf[j++] = '\r';
+    }
+    crlf_buf[j++] = textview->text_cache[i];
+  }
+  crlf_buf[j] = '\0';
+
+  (void)utf8_to_utf16(crlf_buf, wtext, 4096);
   if (textview->hwnd) {
     SetWindowTextW(textview->hwnd, wtext);
   }
@@ -1077,9 +1493,9 @@ cmn_error_e cmn_vbox_create(cmn_vbox_t **out_vbox) {
     return rc;
   }
   rc = register_window_class();
-  vbox->hwnd =
-      CreateWindowExW(0, CMN_WND_CLASS, L"", WS_CHILD | WS_VISIBLE, 0, 0, 100,
-                      100, NULL, NULL, GetModuleHandle(NULL), NULL);
+  vbox->hwnd = CreateWindowExW(0, CMN_WND_CLASS, L"", WS_CHILD | WS_VISIBLE, 0,
+                               0, 460, 320, g_win32_parking_hwnd, NULL,
+                               GetModuleHandle(NULL), NULL);
   if (rc != CMN_SUCCESS) {
     return rc;
   }
@@ -1126,9 +1542,9 @@ cmn_error_e cmn_hbox_create(cmn_hbox_t **out_hbox) {
     return rc;
   }
   rc = register_window_class();
-  hbox->hwnd =
-      CreateWindowExW(0, CMN_WND_CLASS, L"", WS_CHILD | WS_VISIBLE, 0, 0, 100,
-                      100, NULL, NULL, GetModuleHandle(NULL), NULL);
+  hbox->hwnd = CreateWindowExW(0, CMN_WND_CLASS, L"", WS_CHILD | WS_VISIBLE, 0,
+                               0, 410, 36, g_win32_parking_hwnd, NULL,
+                               GetModuleHandle(NULL), NULL);
   if (rc != CMN_SUCCESS) {
     return rc;
   }

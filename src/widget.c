@@ -29,6 +29,33 @@ cmn_error_e cmn_widget_header_init(cmn_widget_header_t *header,
   header->magic = CMN_WIDGET_MAGIC;
   header->kind = kind;
   header->destroy_fn = destroy_fn;
+  header->bounds.x = 0;
+  header->bounds.y = 0;
+  header->layout_root = NULL;
+  header->on_resize = NULL;
+  header->resize_userdata = NULL;
+  switch (kind) {
+  case CMN_WIDGET_KIND_WINDOW:
+  case CMN_WIDGET_KIND_VBOX:
+  case CMN_WIDGET_KIND_HBOX:
+  case CMN_WIDGET_KIND_FLEX:
+  case CMN_WIDGET_KIND_GRID:
+    header->bounds.width = 480;
+    header->bounds.height = 360;
+    break;
+  case CMN_WIDGET_KIND_TEXTVIEW:
+    header->bounds.width = 360;
+    header->bounds.height = 140;
+    break;
+  case CMN_WIDGET_KIND_TEXTBOX:
+    header->bounds.width = 240;
+    header->bounds.height = 32;
+    break;
+  default:
+    header->bounds.width = 120;
+    header->bounds.height = 32;
+    break;
+  }
   return CMN_SUCCESS;
 }
 
@@ -171,6 +198,91 @@ cmn_error_e cmn_textview_as_widget(cmn_textview_t *textview,
                                    cmn_widget_t **out_widget) {
   return upcast_checked(textview, CMN_WIDGET_KIND_TEXTVIEW,
                         (void **)out_widget);
+}
+
+/**
+ * @brief Upcasts a `cmn_flex_t` to a `cmn_container_t`.
+ * @param flex The flex container instance.
+ * @param out_container Output pointer receiving the container handle.
+ * @return CMN_SUCCESS on success, CMN_ERR_INVAL if arguments are NULL.
+ */
+cmn_error_e cmn_flex_as_container(cmn_flex_t *flex,
+                                  cmn_container_t **out_container) {
+  return upcast_checked(flex, CMN_WIDGET_KIND_FLEX, (void **)out_container);
+}
+
+/**
+ * @brief Upcasts a `cmn_flex_t` to a `cmn_widget_t`.
+ * @param flex The flex container instance.
+ * @param out_widget Output pointer receiving the widget handle.
+ * @return CMN_SUCCESS on success, CMN_ERR_INVAL if arguments are NULL.
+ */
+cmn_error_e cmn_flex_as_widget(cmn_flex_t *flex, cmn_widget_t **out_widget) {
+  return upcast_checked(flex, CMN_WIDGET_KIND_FLEX, (void **)out_widget);
+}
+
+/**
+ * @brief Upcasts a `cmn_grid_t` to a `cmn_container_t`.
+ * @param grid The grid container instance.
+ * @param out_container Output pointer receiving the container handle.
+ * @return CMN_SUCCESS on success, CMN_ERR_INVAL if arguments are NULL.
+ */
+cmn_error_e cmn_grid_as_container(cmn_grid_t *grid,
+                                  cmn_container_t **out_container) {
+  return upcast_checked(grid, CMN_WIDGET_KIND_GRID, (void **)out_container);
+}
+
+/**
+ * @brief Upcasts a `cmn_grid_t` to a `cmn_widget_t`.
+ * @param grid The grid container instance.
+ * @param out_widget Output pointer receiving the widget handle.
+ * @return CMN_SUCCESS on success, CMN_ERR_INVAL if arguments are NULL.
+ */
+cmn_error_e cmn_grid_as_widget(cmn_grid_t *grid, cmn_widget_t **out_widget) {
+  return upcast_checked(grid, CMN_WIDGET_KIND_GRID, (void **)out_widget);
+}
+
+/**
+ * @brief Sets the explicit or intrinsic bounding rectangle of any widget.
+ * @param widget The widget to update.
+ * @param bounds The bounding rectangle (`width >= 0`, `height >= 0`).
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_widget_set_bounds(void *widget, cmn_rect_t bounds) {
+  cmn_widget_kind_e kind = CMN_WIDGET_KIND_NONE;
+  cmn_error_e rc;
+  if (bounds.width < 0 || bounds.height < 0) {
+    return CMN_ERR_INVAL;
+  }
+  rc = cmn_widget_get_kind(widget, &kind);
+  if (rc != CMN_SUCCESS || kind == CMN_WIDGET_KIND_MENU ||
+      kind == CMN_WIDGET_KIND_FILEPICKER) {
+    return CMN_ERR_INVAL;
+  }
+  ((cmn_widget_header_t *)widget)->bounds = bounds;
+  return CMN_SUCCESS;
+}
+
+/**
+ * @brief Gets the current computed or configured bounding rectangle of any
+ * widget.
+ * @param widget The widget to query.
+ * @param out_bounds Output pointer receiving the `cmn_rect_t`.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_widget_get_bounds(const void *widget, cmn_rect_t *out_bounds) {
+  cmn_widget_kind_e kind = CMN_WIDGET_KIND_NONE;
+  cmn_error_e rc;
+  if (out_bounds == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  rc = cmn_widget_get_kind(widget, &kind);
+  if (rc != CMN_SUCCESS || kind == CMN_WIDGET_KIND_MENU ||
+      kind == CMN_WIDGET_KIND_FILEPICKER) {
+    return CMN_ERR_INVAL;
+  }
+  *out_bounds = ((const cmn_widget_header_t *)widget)->bounds;
+  return CMN_SUCCESS;
 }
 
 /**

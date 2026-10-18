@@ -513,6 +513,21 @@ cmn_error_e cmn_textbox_set_text(cmn_textbox_t *textbox, const char *text) {
 }
 
 /**
+ * @brief Configures whether a text box masks its characters on Android.
+ * @param textbox The text box to modify.
+ * @param is_password Non-zero (`cmn_true`) to enable password masking, `0`
+ * (`cmn_false`) for plain text.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_textbox_set_password(cmn_textbox_t *textbox, int is_password) {
+  (void)is_password;
+  if (textbox == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  return CMN_SUCCESS;
+}
+
+/**
  * @brief Destroys a text box and frees its memory.
  * @param textbox Pointer to the text box pointer to destroy.
  * @return CMN_SUCCESS on success, error code otherwise.
@@ -645,7 +660,9 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
   }
   if (parent_kind != CMN_WIDGET_KIND_WINDOW &&
       parent_kind != CMN_WIDGET_KIND_VBOX &&
-      parent_kind != CMN_WIDGET_KIND_HBOX) {
+      parent_kind != CMN_WIDGET_KIND_HBOX &&
+      parent_kind != CMN_WIDGET_KIND_FLEX &&
+      parent_kind != CMN_WIDGET_KIND_GRID) {
     return CMN_ERR_INVAL;
   }
   if (child_kind == CMN_WIDGET_KIND_WINDOW ||

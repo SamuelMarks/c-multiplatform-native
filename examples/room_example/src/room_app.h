@@ -7,12 +7,15 @@ extern "C" {
 
 /* clang-format off */
 #include "cmn/error.h"
+#include "cmn/layout.h"
 #include "cmn/room.h"
+#include "cmn/widget.h"
 /* clang-format on */
 
 /**
  * @file room_app.h
- * @brief Room ORM task entity and workflow declarations.
+ * @brief Room ORM task entity and responsive Grid/Flexbox workflow
+ * declarations.
  */
 
 /**
@@ -31,7 +34,8 @@ struct task_s {
 
 /**
  * @brief Executes the Room ORM example workflow (create table, insert task,
- * query task by ID, and verify title).
+ * query task by ID, and lay out the task row inside a responsive CSS Grid and
+ * Flexbox container).
  * @param out_found_id Optional output pointer receiving the queried task ID.
  * @return CMN_SUCCESS on success, error code otherwise.
  */

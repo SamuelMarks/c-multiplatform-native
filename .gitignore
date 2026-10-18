@@ -103,3 +103,8 @@ coverage*.info
 __pycache__/
 .pytest_cache/
 *.pyc
+
+# Vagrant & Test Artifacts
+.vagrant/
+test_screenshots_tmp/
+

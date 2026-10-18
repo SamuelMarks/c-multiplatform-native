@@ -7,6 +7,7 @@ extern "C" {
 
 /* clang-format off */
 #include "cmn/app.h"
+#include "cmn/layout.h"
 #include "cmn/widget.h"
 #include "cmn/error.h"
 /* clang-format on */
@@ -28,7 +29,7 @@ extern "C" {
 typedef struct hello_world_app_s {
   cmn_app_t *app;           /**< Application instance. */
   cmn_window_t *window;     /**< Main window. */
-  cmn_vbox_t *vbox;         /**< Vertical box layout. */
+  cmn_flex_t *flex;         /**< Responsive Flexbox column layout container. */
   cmn_label_t *label;       /**< Greeting label. */
   cmn_button_t *button;     /**< Clickable button. */
   cmn_textview_t *textview; /**< Scrollable text view for logs. */

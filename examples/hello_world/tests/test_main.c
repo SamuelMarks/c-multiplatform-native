@@ -37,6 +37,15 @@ TEST test_app_creation_and_destruction(void) {
   rc = hello_world_app_init(&app);
   ASSERT_EQ(CMN_SUCCESS, rc);
   ASSERT_NEQ((void *)NULL, app);
+  ASSERT_NEQ((void *)NULL, app->flex);
+
+  {
+    cmn_rect_t tv_rect;
+    ASSERT_EQ(CMN_SUCCESS, cmn_window_set_size(app->window, 640, 480));
+    ASSERT_EQ(CMN_SUCCESS,
+              cmn_flex_get_child_rect(app->flex, app->textview, &tv_rect));
+    ASSERT(tv_rect.height > 140);
+  }
 
   ASSERT_EQ(CMN_SUCCESS, hello_world_app_run(app));
 

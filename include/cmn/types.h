@@ -119,12 +119,17 @@ typedef enum cmn_widget_kind_e {
   /** @brief Native menu bar / popup menu (`cmn_menu_t`). */
   CMN_WIDGET_KIND_MENU = 8,
   /** @brief Native file picker dialog (`cmn_filepicker_t`). */
-  CMN_WIDGET_KIND_FILEPICKER = 9
+  CMN_WIDGET_KIND_FILEPICKER = 9,
+  /** @brief Responsive CSS Flexbox-inspired layout container (`cmn_flex_t`). */
+  CMN_WIDGET_KIND_FLEX = 10,
+  /** @brief Responsive CSS Grid-inspired layout container (`cmn_grid_t`). */
+  CMN_WIDGET_KIND_GRID = 11
 } cmn_widget_kind_e;
 
 /** @brief Opaque base handle for any UI widget. */
 typedef struct cmn_widget_s cmn_widget_t;
-/** @brief Opaque base handle for any UI container (window, vbox, hbox). */
+/** @brief Opaque base handle for any UI container (window, vbox, hbox, flex,
+ * grid). */
 typedef struct cmn_container_s cmn_container_t;
 /** @brief Opaque handle for an application instance. */
 typedef struct cmn_app_s cmn_app_t;
@@ -142,6 +147,10 @@ typedef struct cmn_textview_s cmn_textview_t;
 typedef struct cmn_vbox_s cmn_vbox_t;
 /** @brief Opaque handle for a horizontal box layout. */
 typedef struct cmn_hbox_s cmn_hbox_t;
+/** @brief Opaque handle for a responsive flexbox layout container. */
+typedef struct cmn_flex_s cmn_flex_t;
+/** @brief Opaque handle for a responsive grid layout container. */
+typedef struct cmn_grid_s cmn_grid_t;
 /** @brief Opaque handle for a reactive signal. */
 typedef struct cmn_signal_s cmn_signal_t;
 /** @brief Opaque handle for a computed signal. */

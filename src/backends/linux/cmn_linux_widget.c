@@ -1,6 +1,7 @@
 /* clang-format off */
 #include "cmn_linux_internal.h"
 #include "handle_map.h"
+#include "cmn/automation.h"
 #include "cmn/memory.h"
 #include "cmn/string_safe.h"
 #include "cmn/a11y_i18n.h"
@@ -16,6 +17,24 @@
 static int g_cmn_mock_textbox_get_text_fail = 0;
 /** @brief Last handle map operation status code. */
 static int g_linux_map_rc = 0;
+
+/** @brief Flag tracking whether GTK has been initialized. */
+static int g_linux_gtk_initialized = 0;
+
+/**
+ * @brief Ensures GTK3 is initialized before creating any GTK widget.
+ * @return CMN_SUCCESS on success.
+ */
+static cmn_error_e ensure_gtk_init(void) {
+  if (!g_linux_gtk_initialized) {
+    int argc = 0;
+    char **argv = NULL;
+    if (gtk_init_check(&argc, &argv)) {
+      g_linux_gtk_initialized = 1;
+    }
+  }
+  return CMN_SUCCESS;
+}
 
 /**
  * @brief Sets mock failure state for cmn_textbox_get_text.
@@ -161,7 +180,14 @@ cmn_error_e cmn_window_create(cmn_app_t *app, cmn_window_t **out_window) {
                               destroy_window_adapter);
 
   win->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-  gtk_window_set_default_size(GTK_WINDOW(win->window), 800, 600);
+  gtk_window_set_default_size(GTK_WINDOW(win->window), 480, 360);
+  gtk_container_set_border_width(GTK_CONTAINER(win->window), 0);
+  {
+    GtkWidget *hbar = gtk_header_bar_new();
+    gtk_header_bar_set_show_close_button(GTK_HEADER_BAR(hbar), TRUE);
+    gtk_header_bar_set_title(GTK_HEADER_BAR(hbar), "");
+    gtk_window_set_titlebar(GTK_WINDOW(win->window), hbar);
+  }
   g_signal_connect(win->window, "destroy", G_CALLBACK(on_window_destroy), NULL);
   if (rc != CMN_SUCCESS) {
     return rc;
@@ -306,6 +332,96 @@ cmn_error_e cmn_window_get_dpi_scale(cmn_window_t *window, float *out_scale) {
 }
 
 /**
+ * @brief Recursively attaches and positions child `GtkWidget` instances inside
+ * a `GtkFixed` container according to the computed Flexbox (`cmn_flex_t`) or
+ * Grid (`cmn_grid_t`) layout hierarchy.
+ * @param fixed_container The target `GtkFixed` widget inside the window.
+ * @param node Current layout container or leaf widget pointer.
+ * @param offset_x Cumulative horizontal offset from window origin.
+ * @param offset_y Cumulative vertical offset from window origin.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+static cmn_error_e linux_apply_layout_tree(GtkWidget *fixed_container,
+                                           void *node, int offset_x,
+                                           int offset_y) {
+  cmn_widget_kind_e kind = CMN_WIDGET_KIND_NONE;
+  size_t i;
+  cmn_error_e rc;
+
+  if (fixed_container == NULL || node == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  rc = cmn_widget_get_kind(node, &kind);
+  if (rc != CMN_SUCCESS) {
+    return rc;
+  }
+
+  if (kind == CMN_WIDGET_KIND_FLEX) {
+    cmn_flex_t *flex = (cmn_flex_t *)node;
+    for (i = 0; i < flex->child_count; ++i) {
+      cmn_rect_t r = flex->children[i].computed_rect;
+      rc = linux_apply_layout_tree(fixed_container, flex->children[i].widget,
+                                   offset_x + r.x, offset_y + r.y);
+    }
+    return rc;
+  } else if (kind == CMN_WIDGET_KIND_GRID) {
+    cmn_grid_t *grid = (cmn_grid_t *)node;
+    for (i = 0; i < grid->child_count; ++i) {
+      cmn_rect_t r = grid->children[i].computed_rect;
+      rc = linux_apply_layout_tree(fixed_container, grid->children[i].widget,
+                                   offset_x + r.x, offset_y + r.y);
+    }
+    return rc;
+  } else {
+    GtkWidget *c_widget = NULL;
+    GtkWidget *old_parent = NULL;
+    cmn_rect_t r = ((cmn_widget_header_t *)node)->bounds;
+    int w = (r.width > 0) ? r.width : 200;
+    int h = (r.height > 0) ? r.height
+                           : (kind == CMN_WIDGET_KIND_TEXTVIEW ? 140 : 28);
+
+    switch (kind) {
+    case CMN_WIDGET_KIND_BUTTON:
+      c_widget = ((cmn_button_t *)node)->button;
+      break;
+    case CMN_WIDGET_KIND_LABEL:
+      c_widget = ((cmn_label_t *)node)->label;
+      break;
+    case CMN_WIDGET_KIND_TEXTBOX:
+      c_widget = ((cmn_textbox_t *)node)->entry;
+      gtk_editable_select_region(GTK_EDITABLE(c_widget), 0, 0);
+      break;
+    case CMN_WIDGET_KIND_TEXTVIEW:
+      c_widget = ((cmn_textview_t *)node)->scrolled_window;
+      break;
+    default:
+      break;
+    }
+
+    if (c_widget != NULL) {
+      old_parent = gtk_widget_get_parent(c_widget);
+      gtk_widget_set_size_request(c_widget, w, h);
+      if (old_parent == fixed_container) {
+        gtk_fixed_move(GTK_FIXED(fixed_container), c_widget, offset_x,
+                       offset_y);
+      } else {
+        if (old_parent != NULL) {
+          g_object_ref(c_widget);
+          gtk_container_remove(GTK_CONTAINER(old_parent), c_widget);
+          gtk_fixed_put(GTK_FIXED(fixed_container), c_widget, offset_x,
+                        offset_y);
+          g_object_unref(c_widget);
+        } else {
+          gtk_fixed_put(GTK_FIXED(fixed_container), c_widget, offset_x,
+                        offset_y);
+        }
+      }
+    }
+  }
+  return CMN_SUCCESS;
+}
+
+/**
  * @brief Shows a window on the screen.
  * @param window The window to show.
  * @return CMN_SUCCESS on success, error code otherwise.
@@ -313,6 +429,23 @@ cmn_error_e cmn_window_get_dpi_scale(cmn_window_t *window, float *out_scale) {
 cmn_error_e cmn_window_show(cmn_window_t *window) {
   if (window == NULL) {
     return CMN_ERR_INVAL;
+  }
+  if (window->base.layout_root != NULL) {
+    int win_w =
+        (window->base.bounds.width > 0) ? window->base.bounds.width : 480;
+    int win_h =
+        (window->base.bounds.height > 0) ? window->base.bounds.height : 360;
+    GtkWidget *child = gtk_bin_get_child(GTK_BIN(window->window));
+    gtk_window_set_default_size(GTK_WINDOW(window->window), win_w, win_h);
+    if (child == NULL || !GTK_IS_FIXED(child)) {
+      if (child != NULL) {
+        gtk_container_remove(GTK_CONTAINER(window->window), child);
+      }
+      child = gtk_fixed_new();
+      gtk_container_add(GTK_CONTAINER(window->window), child);
+    }
+    gtk_widget_set_size_request(child, win_w, win_h);
+    (void)linux_apply_layout_tree(child, window->base.layout_root, 0, 0);
   }
   gtk_widget_show_all(window->window);
   return CMN_SUCCESS;
@@ -408,6 +541,9 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
   case CMN_WIDGET_KIND_HBOX:
     p_widget = ((cmn_hbox_t *)parent)->box;
     break;
+  case CMN_WIDGET_KIND_FLEX:
+  case CMN_WIDGET_KIND_GRID:
+    break;
   default:
     return CMN_ERR_INVAL;
   }
@@ -431,11 +567,27 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
   case CMN_WIDGET_KIND_HBOX:
     c_widget = ((cmn_hbox_t *)child)->box;
     break;
+  case CMN_WIDGET_KIND_FLEX:
+  case CMN_WIDGET_KIND_GRID:
+    break;
   default:
     return CMN_ERR_INVAL;
   }
 
-  if (GTK_IS_BOX(p_widget)) {
+  if (p_widget == NULL || c_widget == NULL) {
+    return CMN_SUCCESS;
+  }
+  if (gtk_widget_get_parent(c_widget) != NULL) {
+    g_object_ref(c_widget);
+    gtk_container_remove(GTK_CONTAINER(gtk_widget_get_parent(c_widget)),
+                         c_widget);
+    if (GTK_IS_BOX(p_widget)) {
+      gtk_box_pack_start(GTK_BOX(p_widget), c_widget, FALSE, FALSE, 0);
+    } else if (GTK_IS_CONTAINER(p_widget)) {
+      gtk_container_add(GTK_CONTAINER(p_widget), c_widget);
+    }
+    g_object_unref(c_widget);
+  } else if (GTK_IS_BOX(p_widget)) {
     gtk_box_pack_start(GTK_BOX(p_widget), c_widget, FALSE, FALSE, 0);
   } else if (GTK_IS_CONTAINER(p_widget)) {
     gtk_container_add(GTK_CONTAINER(p_widget), c_widget);
@@ -463,6 +615,7 @@ cmn_error_e cmn_button_create(cmn_button_t **out_button) {
   rc = cmn_widget_header_init(&btn->base, CMN_WIDGET_KIND_BUTTON,
                               destroy_button_adapter);
 
+  (void)ensure_gtk_init();
   btn->button = gtk_button_new();
   g_signal_connect(btn->button, "clicked", G_CALLBACK(on_button_clicked), btn);
   if (rc != CMN_SUCCESS) {
@@ -552,7 +705,10 @@ cmn_error_e cmn_label_create(cmn_label_t **out_label) {
   rc = cmn_widget_header_init(&lbl->base, CMN_WIDGET_KIND_LABEL,
                               destroy_label_adapter);
 
+  (void)ensure_gtk_init();
   lbl->label = gtk_label_new("");
+  gtk_widget_set_halign(lbl->label, GTK_ALIGN_START);
+  gtk_label_set_xalign(GTK_LABEL(lbl->label), 0.0f);
   if (rc != CMN_SUCCESS) {
     return rc;
   }
@@ -609,6 +765,7 @@ cmn_error_e cmn_textbox_create(cmn_textbox_t **out_textbox) {
   rc = cmn_widget_header_init(&tb->base, CMN_WIDGET_KIND_TEXTBOX,
                               destroy_textbox_adapter);
 
+  (void)ensure_gtk_init();
   tb->entry = gtk_entry_new();
   if (rc != CMN_SUCCESS) {
     return rc;
@@ -629,6 +786,23 @@ cmn_error_e cmn_textbox_set_text(cmn_textbox_t *textbox, const char *text) {
     return CMN_ERR_INVAL;
   }
   gtk_entry_set_text(GTK_ENTRY(textbox->entry), text);
+  return CMN_SUCCESS;
+}
+
+/**
+ * @brief Configures whether a text box masks its characters using
+ * `gtk_entry_set_visibility`.
+ * @param textbox The text box to modify.
+ * @param is_password Non-zero (`cmn_true`) to enable password masking, `0`
+ * (`cmn_false`) for plain text.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_textbox_set_password(cmn_textbox_t *textbox, int is_password) {
+  if (textbox == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  gtk_entry_set_visibility(GTK_ENTRY(textbox->entry),
+                           is_password ? FALSE : TRUE);
   return CMN_SUCCESS;
 }
 
@@ -714,11 +888,19 @@ cmn_error_e cmn_textview_create(cmn_textview_t **out_textview) {
   rc = cmn_widget_header_init(&tv->base, CMN_WIDGET_KIND_TEXTVIEW,
                               destroy_textview_adapter);
 
+  (void)ensure_gtk_init();
   tv->scrolled_window = gtk_scrolled_window_new(NULL, NULL);
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(tv->scrolled_window),
                                  GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+  gtk_scrolled_window_set_shadow_type(GTK_SCROLLED_WINDOW(tv->scrolled_window),
+                                      GTK_SHADOW_ETCHED_IN);
+  gtk_widget_set_size_request(tv->scrolled_window, 400, 140);
 
   tv->textview = gtk_text_view_new();
+  gtk_text_view_set_left_margin(GTK_TEXT_VIEW(tv->textview), 6);
+  gtk_text_view_set_right_margin(GTK_TEXT_VIEW(tv->textview), 6);
+  gtk_text_view_set_top_margin(GTK_TEXT_VIEW(tv->textview), 4);
+  gtk_text_view_set_bottom_margin(GTK_TEXT_VIEW(tv->textview), 4);
   gtk_text_view_set_editable(GTK_TEXT_VIEW(tv->textview), FALSE);
   gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(tv->textview), FALSE);
 
@@ -850,6 +1032,7 @@ cmn_error_e cmn_vbox_create(cmn_vbox_t **out_vbox) {
   rc = cmn_widget_header_init(&vbox->base, CMN_WIDGET_KIND_VBOX,
                               destroy_vbox_adapter);
 
+  (void)ensure_gtk_init();
   vbox->box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
   if (rc != CMN_SUCCESS) {
     return rc;
@@ -893,6 +1076,7 @@ cmn_error_e cmn_hbox_create(cmn_hbox_t **out_hbox) {
   rc = cmn_widget_header_init(&hbox->base, CMN_WIDGET_KIND_HBOX,
                               destroy_hbox_adapter);
 
+  (void)ensure_gtk_init();
   hbox->box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
   if (rc != CMN_SUCCESS) {
     return rc;
@@ -924,20 +1108,74 @@ cmn_error_e cmn_hbox_destroy(cmn_hbox_t **hbox) {
  */
 cmn_error_e cmn_automation_capture_screenshot(cmn_window_t *win,
                                               const char *out_filepath) {
-  int width, height;
-  GdkPixbuf *pixbuf;
+  GdkPixbuf *pixbuf = NULL;
   gboolean res;
-  GdkWindow *gdk_win;
+  GtkWidget *offscreen;
+  GtkWidget *vbox_frame;
+  GtkWidget *hbar;
+  GtkWidget *child;
+  const gchar *title_str;
+  int iter;
+
   if (win == NULL || out_filepath == NULL || out_filepath[0] == '\0') {
     return CMN_ERR_INVAL;
   }
-  gdk_win = gtk_widget_get_window(GTK_WIDGET(win->window));
-  if (gdk_win == NULL) {
-    return CMN_ERR_IO;
+
+  title_str = gtk_window_get_title(GTK_WINDOW(win->window));
+  child = gtk_bin_get_child(GTK_BIN(win->window));
+
+  offscreen = gtk_offscreen_window_new();
+  gtk_window_set_default_size(
+      GTK_WINDOW(offscreen),
+      (win->base.bounds.width > 0) ? win->base.bounds.width : 480,
+      (win->base.bounds.height > 0) ? win->base.bounds.height : 360);
+
+  vbox_frame = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  hbar = gtk_header_bar_new();
+  gtk_header_bar_set_show_close_button(GTK_HEADER_BAR(hbar), TRUE);
+  gtk_header_bar_set_title(GTK_HEADER_BAR(hbar), title_str ? title_str : "");
+  gtk_box_pack_start(GTK_BOX(vbox_frame), hbar, FALSE, FALSE, 0);
+
+  if (child != NULL) {
+    g_object_ref(child);
+    gtk_container_remove(GTK_CONTAINER(win->window), child);
+    if (!GTK_IS_FIXED(child)) {
+      gtk_widget_set_margin_start(child, 16);
+      gtk_widget_set_margin_end(child, 16);
+      gtk_widget_set_margin_top(child, 16);
+      gtk_widget_set_margin_bottom(child, 16);
+    }
+    gtk_box_pack_start(GTK_BOX(vbox_frame), child, TRUE, TRUE, 0);
   }
-  width = gdk_window_get_width(gdk_win);
-  height = gdk_window_get_height(gdk_win);
-  pixbuf = gdk_pixbuf_get_from_window(gdk_win, 0, 0, width, height);
+
+  gtk_container_add(GTK_CONTAINER(offscreen), vbox_frame);
+  gtk_widget_show_all(offscreen);
+  gtk_window_set_focus(GTK_WINDOW(offscreen), NULL);
+  if (child != NULL && GTK_IS_CONTAINER(child)) {
+    GList *kids = gtk_container_get_children(GTK_CONTAINER(child));
+    GList *it;
+    for (it = kids; it != NULL; it = it->next) {
+      if (GTK_IS_EDITABLE(it->data)) {
+        gtk_editable_select_region(GTK_EDITABLE(it->data), 0, 0);
+      }
+    }
+    g_list_free(kids);
+  }
+
+  for (iter = 0; iter < 200 && gtk_events_pending(); ++iter) {
+    gtk_main_iteration_do(FALSE);
+  }
+  gtk_window_set_focus(GTK_WINDOW(offscreen), NULL);
+
+  pixbuf = gtk_offscreen_window_get_pixbuf(GTK_OFFSCREEN_WINDOW(offscreen));
+
+  if (child != NULL) {
+    gtk_container_remove(GTK_CONTAINER(vbox_frame), child);
+    gtk_container_add(GTK_CONTAINER(win->window), child);
+    g_object_unref(child);
+  }
+  gtk_widget_destroy(offscreen);
+
   if (!pixbuf) {
     return CMN_ERR_IO;
   }
@@ -966,6 +1204,7 @@ cmn_error_e cmn_menu_create(cmn_menu_t **out_menu) {
 
   rc = cmn_widget_header_init(&m->base, CMN_WIDGET_KIND_MENU,
                               destroy_menu_adapter);
+  (void)ensure_gtk_init();
   m->gtk_menu = gtk_menu_new();
   m->gtk_menu_bar = gtk_menu_bar_new();
   *out_menu = m;
@@ -1122,6 +1361,13 @@ cmn_error_e cmn_filepicker_show_dialog(cmn_filepicker_t *filepicker) {
                                        GTK_RESPONSE_CANCEL, "_Open",
                                        GTK_RESPONSE_ACCEPT, NULL);
 
+#ifdef CMN_TESTING
+  (void)res;
+  if (filepicker->path) {
+    g_free(filepicker->path);
+  }
+  filepicker->path = g_strdup("/tmp/test");
+#else
   res = gtk_dialog_run(GTK_DIALOG(dialog));
   if (res == GTK_RESPONSE_ACCEPT) {
     GtkFileChooser *chooser = GTK_FILE_CHOOSER(dialog);
@@ -1130,6 +1376,7 @@ cmn_error_e cmn_filepicker_show_dialog(cmn_filepicker_t *filepicker) {
     }
     filepicker->path = gtk_file_chooser_get_filename(chooser);
   }
+#endif
 
   gtk_widget_destroy(dialog);
   return CMN_SUCCESS;

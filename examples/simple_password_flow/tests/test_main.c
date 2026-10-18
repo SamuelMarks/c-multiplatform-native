@@ -84,10 +84,10 @@ TEST test_login_validations(void) {
 TEST test_login_submit_invalid(void) {
   app_state_t state;
   cmn_router_t *router = NULL;
-  cmn_vbox_t *container = NULL;
+  cmn_flex_t *container = NULL;
   void *widget = NULL;
 
-  ASSERT_EQ(CMN_SUCCESS, cmn_vbox_create(&container));
+  ASSERT_EQ(CMN_SUCCESS, cmn_flex_create(&container));
   ASSERT_EQ(CMN_SUCCESS, cmn_router_create(container, &router));
   ASSERT_EQ(CMN_SUCCESS, app_state_init(&state, router));
 
@@ -97,7 +97,7 @@ TEST test_login_submit_invalid(void) {
 
   ASSERT_EQ(CMN_SUCCESS, login_view_cleanup(1));
   ASSERT_EQ(CMN_SUCCESS, cmn_router_destroy(&router));
-  ASSERT_EQ(CMN_SUCCESS, cmn_vbox_destroy(&container));
+  ASSERT_EQ(CMN_SUCCESS, cmn_flex_destroy(&container));
   PASS();
 }
 
@@ -109,11 +109,11 @@ TEST test_login_submit_invalid(void) {
 TEST test_login_submit_valid(void) {
   app_state_t state;
   cmn_router_t *router = NULL;
-  cmn_vbox_t *container = NULL;
+  cmn_flex_t *container = NULL;
   const char *cur_path = NULL;
   void *widget = NULL;
 
-  ASSERT_EQ(CMN_SUCCESS, cmn_vbox_create(&container));
+  ASSERT_EQ(CMN_SUCCESS, cmn_flex_create(&container));
   ASSERT_EQ(CMN_SUCCESS, cmn_router_create(container, &router));
   ASSERT_EQ(CMN_SUCCESS, app_state_init(&state, router));
 
@@ -134,7 +134,7 @@ TEST test_login_submit_valid(void) {
   ASSERT_EQ(CMN_SUCCESS, login_view_cleanup(1));
   ASSERT_EQ(CMN_SUCCESS, welcome_view_cleanup(0));
   ASSERT_EQ(CMN_SUCCESS, cmn_router_destroy(&router));
-  ASSERT_EQ(CMN_SUCCESS, cmn_vbox_destroy(&container));
+  ASSERT_EQ(CMN_SUCCESS, cmn_flex_destroy(&container));
   PASS();
 }
 
@@ -146,10 +146,10 @@ TEST test_login_submit_valid(void) {
 TEST test_login_submit_oom(void) {
   app_state_t state;
   cmn_router_t *router = NULL;
-  cmn_vbox_t *container = NULL;
+  cmn_flex_t *container = NULL;
   void *widget = NULL;
 
-  ASSERT_EQ(CMN_SUCCESS, cmn_vbox_create(&container));
+  ASSERT_EQ(CMN_SUCCESS, cmn_flex_create(&container));
   ASSERT_EQ(CMN_SUCCESS, cmn_router_create(container, &router));
   ASSERT_EQ(CMN_SUCCESS, app_state_init(&state, router));
 
@@ -168,7 +168,7 @@ TEST test_login_submit_oom(void) {
 
   ASSERT_EQ(CMN_SUCCESS, login_view_cleanup(1));
   ASSERT_EQ(CMN_SUCCESS, cmn_router_destroy(&router));
-  ASSERT_EQ(CMN_SUCCESS, cmn_vbox_destroy(&container));
+  ASSERT_EQ(CMN_SUCCESS, cmn_flex_destroy(&container));
   PASS();
 }
 
@@ -180,13 +180,13 @@ TEST test_login_submit_oom(void) {
 TEST test_login_submit_oom2(void) {
   app_state_t state;
   cmn_router_t *router = NULL;
-  cmn_vbox_t *container = NULL;
+  cmn_flex_t *container = NULL;
   void *widget = NULL;
   char long_username[300];
 
   (void)cmn_mock_alloc_set(0, 0);
 
-  ASSERT_EQ(CMN_SUCCESS, cmn_vbox_create(&container));
+  ASSERT_EQ(CMN_SUCCESS, cmn_flex_create(&container));
   ASSERT_EQ(CMN_SUCCESS, cmn_router_create(container, &router));
   ASSERT_EQ(CMN_SUCCESS, app_state_init(&state, router));
 
@@ -206,7 +206,7 @@ TEST test_login_submit_oom2(void) {
 
   ASSERT_EQ(CMN_SUCCESS, login_view_cleanup(1));
   ASSERT_EQ(CMN_SUCCESS, cmn_router_destroy(&router));
-  ASSERT_EQ(CMN_SUCCESS, cmn_vbox_destroy(&container));
+  ASSERT_EQ(CMN_SUCCESS, cmn_flex_destroy(&container));
   PASS();
 }
 
@@ -217,11 +217,11 @@ TEST test_login_submit_oom2(void) {
 TEST test_login_submit_null_form(void) {
   app_state_t state;
   cmn_router_t *router = NULL;
-  cmn_vbox_t *container = NULL;
+  cmn_flex_t *container = NULL;
   void *widget = NULL;
   cmn_form_t *temp_form = NULL;
 
-  ASSERT_EQ(CMN_SUCCESS, cmn_vbox_create(&container));
+  ASSERT_EQ(CMN_SUCCESS, cmn_flex_create(&container));
   ASSERT_EQ(CMN_SUCCESS, cmn_router_create(container, &router));
   ASSERT_EQ(CMN_SUCCESS, app_state_init(&state, router));
 
@@ -234,7 +234,7 @@ TEST test_login_submit_null_form(void) {
 
   ASSERT_EQ(CMN_SUCCESS, login_view_cleanup(1));
   ASSERT_EQ(CMN_SUCCESS, cmn_router_destroy(&router));
-  ASSERT_EQ(CMN_SUCCESS, cmn_vbox_destroy(&container));
+  ASSERT_EQ(CMN_SUCCESS, cmn_flex_destroy(&container));
   PASS();
 }
 
@@ -245,11 +245,11 @@ TEST test_login_submit_null_form(void) {
 TEST test_login_submit_null_tb(void) {
   app_state_t state;
   cmn_router_t *router = NULL;
-  cmn_vbox_t *container = NULL;
+  cmn_flex_t *container = NULL;
   void *widget = NULL;
   cmn_textbox_t *temp_tb = NULL;
 
-  ASSERT_EQ(CMN_SUCCESS, cmn_vbox_create(&container));
+  ASSERT_EQ(CMN_SUCCESS, cmn_flex_create(&container));
   ASSERT_EQ(CMN_SUCCESS, cmn_router_create(container, &router));
   ASSERT_EQ(CMN_SUCCESS, app_state_init(&state, router));
 
@@ -267,7 +267,7 @@ TEST test_login_submit_null_tb(void) {
 
   ASSERT_EQ(CMN_SUCCESS, login_view_cleanup(1));
   ASSERT_EQ(CMN_SUCCESS, cmn_router_destroy(&router));
-  ASSERT_EQ(CMN_SUCCESS, cmn_vbox_destroy(&container));
+  ASSERT_EQ(CMN_SUCCESS, cmn_flex_destroy(&container));
   PASS();
 }
 
@@ -305,11 +305,11 @@ TEST test_login_factory_oom(void) {
 TEST test_welcome_logout(void) {
   app_state_t state;
   cmn_router_t *router = NULL;
-  cmn_vbox_t *container = NULL;
+  cmn_flex_t *container = NULL;
   const char *cur_path = NULL;
   void *widget = NULL;
 
-  ASSERT_EQ(CMN_SUCCESS, cmn_vbox_create(&container));
+  ASSERT_EQ(CMN_SUCCESS, cmn_flex_create(&container));
   ASSERT_EQ(CMN_SUCCESS, cmn_router_create(container, &router));
   ASSERT_EQ(CMN_SUCCESS, app_state_init(&state, router));
   ASSERT_EQ(CMN_SUCCESS,
@@ -327,7 +327,7 @@ TEST test_welcome_logout(void) {
   ASSERT_EQ(CMN_SUCCESS, welcome_view_cleanup(1));
   ASSERT_EQ(CMN_SUCCESS, login_view_cleanup(0));
   ASSERT_EQ(CMN_SUCCESS, cmn_router_destroy(&router));
-  ASSERT_EQ(CMN_SUCCESS, cmn_vbox_destroy(&container));
+  ASSERT_EQ(CMN_SUCCESS, cmn_flex_destroy(&container));
   PASS();
 }
 
@@ -338,10 +338,10 @@ TEST test_welcome_logout(void) {
 TEST test_welcome_logout_oom(void) {
   app_state_t state;
   cmn_router_t *router = NULL;
-  cmn_vbox_t *container = NULL;
+  cmn_flex_t *container = NULL;
   void *widget = NULL;
 
-  ASSERT_EQ(CMN_SUCCESS, cmn_vbox_create(&container));
+  ASSERT_EQ(CMN_SUCCESS, cmn_flex_create(&container));
   ASSERT_EQ(CMN_SUCCESS, cmn_router_create(container, &router));
   ASSERT_EQ(CMN_SUCCESS, app_state_init(&state, router));
   ASSERT_EQ(CMN_SUCCESS,
@@ -357,7 +357,7 @@ TEST test_welcome_logout_oom(void) {
 
   ASSERT_EQ(CMN_SUCCESS, welcome_view_cleanup(1));
   ASSERT_EQ(CMN_SUCCESS, cmn_router_destroy(&router));
-  ASSERT_EQ(CMN_SUCCESS, cmn_vbox_destroy(&container));
+  ASSERT_EQ(CMN_SUCCESS, cmn_flex_destroy(&container));
   PASS();
 }
 

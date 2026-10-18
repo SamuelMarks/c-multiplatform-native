@@ -286,6 +286,9 @@ TEST test_app_lifecycle(void) {
   ASSERT_EQ(CMN_SUCCESS, cmn_label_set_text(lbl, "txt"));
 
   ASSERT_EQ(CMN_SUCCESS, cmn_textbox_create(&tb));
+  ASSERT_EQ(CMN_ERR_INVAL, cmn_textbox_set_password(NULL, 1));
+  ASSERT_EQ(CMN_SUCCESS, cmn_textbox_set_password(tb, 1));
+  ASSERT_EQ(CMN_SUCCESS, cmn_textbox_set_password(tb, 0));
 
   /* Setting a non-container (label) as parent must fail */
   ASSERT_EQ(CMN_ERR_INVAL, cmn_widget_set_parent(lbl, btn));
@@ -297,6 +300,8 @@ TEST test_app_lifecycle(void) {
   /* Valid parenting across window, vbox, hbox, label, textbox, button */
   ASSERT_EQ(CMN_SUCCESS, cmn_widget_set_parent(hbox, lbl));
   ASSERT_EQ(CMN_SUCCESS, cmn_widget_set_parent(hbox, tb));
+  ASSERT_EQ(CMN_SUCCESS, cmn_textbox_set_password(tb, 1));
+  ASSERT_EQ(CMN_SUCCESS, cmn_textbox_set_password(tb, 0));
   ASSERT_EQ(CMN_SUCCESS, cmn_widget_set_parent(vbox, hbox));
   ASSERT_EQ(CMN_SUCCESS, cmn_widget_set_parent(vbox, btn));
   ASSERT_EQ(CMN_SUCCESS, cmn_widget_set_parent(win, vbox));

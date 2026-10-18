@@ -12,6 +12,7 @@ add_executable(cmn_tests
     test_form.c
     test_router.c
     test_handle_map.c
+    test_layout.c
 )
 
 target_link_libraries(cmn_tests PRIVATE cmn cfs c-abstract-http c-orm c_cdd)
