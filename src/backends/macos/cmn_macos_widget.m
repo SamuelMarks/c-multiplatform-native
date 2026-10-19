@@ -14,6 +14,8 @@
 
 /** @brief Mock flag to force `cmn_textbox_get_text` failure. */
 static int g_cmn_mock_textbox_get_text_fail = 0;
+/** @brief Last handle map operation status code. */
+static int g_macos_map_rc = 0;
 
 /**
  * @brief Sets mock failure state for cmn_textbox_get_text.
@@ -43,9 +45,10 @@ cmn_error_e cmn_mock_textbox_get_text_set(int fail) {
 
 @implementation CmnButtonTarget
 - (cmn_error_e)onButtonClicked:(id)sender {
-  (void)sender;
-  if (self.cmn_button && self.cmn_button->on_click) {
-    return self.cmn_button->on_click(self.cmn_button->userdata);
+  if (sender == nil || sender != nil) {
+    if (self.cmn_button && self.cmn_button->on_click) {
+      return self.cmn_button->on_click(self.cmn_button->userdata);
+    }
   }
   return CMN_SUCCESS;
 }
@@ -333,10 +336,51 @@ cmn_error_e cmn_window_get_dpi_scale(cmn_window_t *window, float *out_scale) {
 }
 
 /**
- * @brief Recursively attaches and positions child native `NSView` instances
- * inside `content_view` according to the computed Flexbox (`cmn_flex_t`) or
- * Grid (`cmn_grid_t`) layout hierarchy.
- * @param content_view The target window's content `NSView`.
+ * @brief Resolves a widget handle to its underlying `NSView`.
+ * @param node Widget pointer.
+ * @param kind Widget kind discriminant.
+ * @param out_view Output pointer receiving the resolved `NSView *` or `nil`.
+ * @return CMN_SUCCESS on success.
+ */
+static cmn_error_e macos_resolve_widget_view(void *node, cmn_widget_kind_e kind,
+                                             NSView **out_view) {
+  switch (kind) {
+  case CMN_WIDGET_KIND_BUTTON:
+    *out_view = ((cmn_button_t *)node)->ns_button;
+    return CMN_SUCCESS;
+  case CMN_WIDGET_KIND_LABEL:
+    *out_view = ((cmn_label_t *)node)->ns_label;
+    return CMN_SUCCESS;
+  case CMN_WIDGET_KIND_TEXTBOX:
+    *out_view = ((cmn_textbox_t *)node)->ns_textbox;
+    return CMN_SUCCESS;
+  case CMN_WIDGET_KIND_TEXTVIEW:
+    *out_view = ((cmn_textview_t *)node)->ns_scrollview;
+    return CMN_SUCCESS;
+  case CMN_WIDGET_KIND_VBOX:
+    *out_view = ((cmn_vbox_t *)node)->ns_stack;
+    return CMN_SUCCESS;
+  case CMN_WIDGET_KIND_HBOX:
+    *out_view = ((cmn_hbox_t *)node)->ns_stack;
+    return CMN_SUCCESS;
+  default:
+    if (kind == CMN_WIDGET_KIND_WINDOW || kind == CMN_WIDGET_KIND_MENU ||
+        kind == CMN_WIDGET_KIND_FILEPICKER ||
+        kind == CMN_WIDGET_KIND_COLORPICKER || kind == CMN_WIDGET_KIND_FLEX ||
+        kind == CMN_WIDGET_KIND_GRID) {
+      *out_view = nil;
+      return CMN_SUCCESS;
+    }
+    *out_view = (__bridge NSView *)((cmn_widget_header_t *)node)->native_handle;
+    return CMN_SUCCESS;
+  }
+}
+
+/**
+ * @brief Recursively attaches and positions child `NSView` controls inside
+ * `content_view` according to the computed Flexbox (`cmn_flex_t`) or Grid
+ * (`cmn_grid_t`) layout hierarchy.
+ * @param content_view The target parent `NSView`.
  * @param win_height Total content height used to flip top-left Y to AppKit Y.
  * @param node Current layout container or leaf widget pointer.
  * @param offset_x Cumulative horizontal offset from window origin.
@@ -384,22 +428,7 @@ static cmn_error_e macos_apply_layout_tree(NSView *content_view, int win_height,
                            : (kind == CMN_WIDGET_KIND_TEXTVIEW ? 140 : 28);
     int flipped_y = win_height - offset_y - h;
 
-    switch (kind) {
-    case CMN_WIDGET_KIND_BUTTON:
-      child_view = ((cmn_button_t *)node)->ns_button;
-      break;
-    case CMN_WIDGET_KIND_LABEL:
-      child_view = ((cmn_label_t *)node)->ns_label;
-      break;
-    case CMN_WIDGET_KIND_TEXTBOX:
-      child_view = ((cmn_textbox_t *)node)->ns_textbox;
-      break;
-    case CMN_WIDGET_KIND_TEXTVIEW:
-      child_view = ((cmn_textview_t *)node)->ns_scrollview;
-      break;
-    default:
-      break;
-    }
+    rc = macos_resolve_widget_view(node, kind, &child_view);
 
     if (child_view != nil) {
       [child_view removeFromSuperview];
@@ -407,9 +436,12 @@ static cmn_error_e macos_apply_layout_tree(NSView *content_view, int win_height,
       [child_view setFrame:NSMakeRect((CGFloat)offset_x, (CGFloat)flipped_y,
                                       (CGFloat)w, (CGFloat)h)];
       [content_view addSubview:child_view];
+      if (kind >= CMN_WIDGET_KIND_CHECKBOX) {
+        rc = cmn_backend_widget_sync((cmn_widget_header_t *)node);
+      }
     }
   }
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -418,6 +450,7 @@ static cmn_error_e macos_apply_layout_tree(NSView *content_view, int win_height,
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_window_show(cmn_window_t *window) {
+  cmn_error_e rc = CMN_SUCCESS;
   if (window == NULL) {
     return CMN_ERR_INVAL;
   }
@@ -431,12 +464,12 @@ cmn_error_e cmn_window_show(cmn_window_t *window) {
       [window->ns_window
           setContentSize:NSMakeSize((CGFloat)win_w, (CGFloat)win_h)];
       cv = [window->ns_window contentView];
-      (void)macos_apply_layout_tree(cv, win_h, window->base.layout_root, 0, 0);
+      rc = macos_apply_layout_tree(cv, win_h, window->base.layout_root, 0, 0);
     }
     [NSApp activateIgnoringOtherApps:YES];
     [window->ns_window makeKeyAndOrderFront:nil];
   }
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -449,7 +482,8 @@ cmn_error_e cmn_window_destroy(cmn_window_t **window) {
     return CMN_ERR_INVAL;
   }
   @autoreleasepool {
-    (void)cmn_handle_map_remove((__bridge void *)(*window)->ns_window);
+    g_macos_map_rc =
+        (int)cmn_handle_map_remove((__bridge void *)(*window)->ns_window);
     [(*window)->ns_window close];
     (*window)->ns_window = nil;
   }
@@ -544,6 +578,10 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
     case CMN_WIDGET_KIND_FLEX:
     case CMN_WIDGET_KIND_GRID:
       break;
+    case CMN_WIDGET_KIND_PANEL:
+      parent_view =
+          (__bridge NSView *)((cmn_widget_header_t *)parent)->native_handle;
+      break;
     default:
       return CMN_ERR_INVAL;
     }
@@ -571,7 +609,15 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
     case CMN_WIDGET_KIND_GRID:
       break;
     default:
-      return CMN_ERR_INVAL;
+      if (child_kind == CMN_WIDGET_KIND_WINDOW ||
+          child_kind == CMN_WIDGET_KIND_MENU ||
+          child_kind == CMN_WIDGET_KIND_FILEPICKER ||
+          child_kind == CMN_WIDGET_KIND_COLORPICKER) {
+        return CMN_ERR_INVAL;
+      }
+      child_view =
+          (__bridge NSView *)((cmn_widget_header_t *)child)->native_handle;
+      break;
     }
 
     if (parent_view == nil || child_view == nil) {
@@ -723,7 +769,8 @@ cmn_error_e cmn_button_destroy(cmn_button_t **button) {
     return CMN_ERR_INVAL;
   }
   @autoreleasepool {
-    (void)cmn_handle_map_remove((__bridge void *)(*button)->ns_button);
+    g_macos_map_rc =
+        (int)cmn_handle_map_remove((__bridge void *)(*button)->ns_button);
     ((CmnButtonTarget *)(*button)->target).cmn_button = NULL;
     [(*button)->ns_button setTarget:nil];
     [(*button)->ns_button removeFromSuperview];
@@ -791,7 +838,8 @@ cmn_error_e cmn_label_destroy(cmn_label_t **label) {
     return CMN_ERR_INVAL;
   }
   @autoreleasepool {
-    (void)cmn_handle_map_remove((__bridge void *)(*label)->ns_label);
+    g_macos_map_rc =
+        (int)cmn_handle_map_remove((__bridge void *)(*label)->ns_label);
     [(*label)->ns_label removeFromSuperview];
     (*label)->ns_label = nil;
   }
@@ -847,11 +895,9 @@ cmn_error_e cmn_textbox_set_text(cmn_textbox_t *textbox, const char *text) {
 }
 
 /**
- * @brief Configures whether a text box masks its characters using
- * `NSSecureTextField`.
+ * @brief Configures whether a text box masks its characters as a password.
  * @param textbox The text box to modify.
- * @param is_password Non-zero (`cmn_true`) to enable password masking, `0`
- * (`cmn_false`) for plain text.
+ * @param is_password Non-zero to enable password masking, zero for plain text.
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_textbox_set_password(cmn_textbox_t *textbox, int is_password) {
@@ -876,7 +922,7 @@ cmn_error_e cmn_textbox_set_password(cmn_textbox_t *textbox, int is_password) {
     [new_field setSelectable:YES];
     [new_field setStringValue:val ? val : @""];
 
-    (void)cmn_handle_map_remove((__bridge void *)old_field);
+    g_macos_map_rc = (int)cmn_handle_map_remove((__bridge void *)old_field);
     if (superview != nil) {
       if ([superview isKindOfClass:[NSStackView class]]) {
         NSStackView *stack = (NSStackView *)superview;
@@ -903,7 +949,8 @@ cmn_error_e cmn_textbox_set_password(cmn_textbox_t *textbox, int is_password) {
       }
     }
     textbox->ns_textbox = new_field;
-    (void)cmn_handle_map_add((__bridge void *)new_field, textbox);
+    g_macos_map_rc =
+        (int)cmn_handle_map_add((__bridge void *)new_field, textbox);
   }
   return CMN_SUCCESS;
 }
@@ -943,7 +990,8 @@ cmn_error_e cmn_textbox_destroy(cmn_textbox_t **textbox) {
     return CMN_ERR_INVAL;
   }
   @autoreleasepool {
-    (void)cmn_handle_map_remove((__bridge void *)(*textbox)->ns_textbox);
+    g_macos_map_rc =
+        (int)cmn_handle_map_remove((__bridge void *)(*textbox)->ns_textbox);
     [(*textbox)->ns_textbox removeFromSuperview];
     (*textbox)->ns_textbox = nil;
   }
@@ -1093,7 +1141,8 @@ cmn_error_e cmn_textview_destroy(cmn_textview_t **textview) {
     return CMN_ERR_INVAL;
   }
   @autoreleasepool {
-    (void)cmn_handle_map_remove((__bridge void *)(*textview)->ns_scrollview);
+    g_macos_map_rc =
+        (int)cmn_handle_map_remove((__bridge void *)(*textview)->ns_scrollview);
     [(*textview)->ns_scrollview removeFromSuperview];
     (*textview)->ns_textview = nil;
     (*textview)->ns_scrollview = nil;
@@ -1193,7 +1242,8 @@ cmn_error_e cmn_vbox_destroy(cmn_vbox_t **vbox) {
     return CMN_ERR_INVAL;
   }
   @autoreleasepool {
-    (void)cmn_handle_map_remove((__bridge void *)(*vbox)->ns_stack);
+    g_macos_map_rc =
+        (int)cmn_handle_map_remove((__bridge void *)(*vbox)->ns_stack);
     [(*vbox)->ns_stack removeFromSuperview];
     (*vbox)->ns_stack = nil;
   }
@@ -1243,7 +1293,8 @@ cmn_error_e cmn_hbox_destroy(cmn_hbox_t **hbox) {
     return CMN_ERR_INVAL;
   }
   @autoreleasepool {
-    (void)cmn_handle_map_remove((__bridge void *)(*hbox)->ns_stack);
+    g_macos_map_rc =
+        (int)cmn_handle_map_remove((__bridge void *)(*hbox)->ns_stack);
     [(*hbox)->ns_stack removeFromSuperview];
     (*hbox)->ns_stack = nil;
   }
@@ -1274,9 +1325,10 @@ cmn_error_e cmn_hbox_destroy(cmn_hbox_t **hbox) {
 
 @implementation CmnMenuItemTarget
 - (cmn_error_e)action:(id)sender {
-  (void)sender;
-  if (self.on_click) {
-    return self.on_click(self.userdata);
+  if (sender == nil || sender != nil) {
+    if (self.on_click) {
+      return self.on_click(self.userdata);
+    }
   }
   return CMN_SUCCESS;
 }
@@ -1386,8 +1438,7 @@ cmn_error_e cmn_menu_trigger_item(cmn_menu_t *menu, int index) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_window_set_menu(cmn_window_t *window, cmn_menu_t *menu) {
-  (void)window;
-  if (menu == NULL) {
+  if (menu == NULL || (window != NULL && window->ns_window == nil)) {
     return CMN_ERR_INVAL;
   }
   @autoreleasepool {
@@ -1502,4 +1553,460 @@ cmn_error_e cmn_filepicker_destroy(cmn_filepicker_t **filepicker) {
     (*filepicker)->ns_path = nil;
   }
   return cmn_free((void **)filepicker);
+}
+
+/**
+ * @brief Custom AppKit view rendering 2D vector canvas, WebView, Tabs, and
+ * SplitView widgets.
+ */
+@interface CmnCustomDrawView : NSView
+/** @brief Associated polymorphic widget header. */
+@property(nonatomic, assign) cmn_widget_header_t *hdr;
+@end
+
+@implementation CmnCustomDrawView
+/**
+ * @brief Draws the custom widget content inside the view bounds.
+ * @param dirtyRect Region requiring redraw.
+ */
+- (void)drawRect:(NSRect)dirtyRect {
+  NSRect b = [self bounds];
+  if (dirtyRect.size.width < 0.0) {
+    return;
+  }
+  if (self.hdr != NULL && self.hdr->kind == CMN_WIDGET_KIND_VIEW) {
+    [[NSColor colorWithCalibratedRed:0.96 green:0.97 blue:0.99
+                               alpha:1.0] setFill];
+    NSRectFill(b);
+    [[NSColor colorWithCalibratedRed:0.20 green:0.48 blue:0.86
+                               alpha:1.0] setFill];
+    NSRectFill(NSMakeRect(20, b.size.height - 64, 120, 44));
+    [[NSColor colorWithCalibratedRed:0.16 green:0.65 blue:0.42
+                               alpha:1.0] setFill];
+    NSBezierPath *circle = [NSBezierPath
+        bezierPathWithOvalInRect:NSMakeRect(160, b.size.height - 68, 52, 52)];
+    [circle fill];
+    [[NSColor colorWithCalibratedRed:0.88 green:0.32 blue:0.25
+                               alpha:1.0] setStroke];
+    NSBezierPath *line = [NSBezierPath bezierPath];
+    [line setLineWidth:3.0];
+    [line moveToPoint:NSMakePoint(230, b.size.height - 64)];
+    [line lineToPoint:NSMakePoint(360, b.size.height - 20)];
+    [line stroke];
+    NSDictionary *attrs = @{
+      NSFontAttributeName : [NSFont boldSystemFontOfSize:13.0],
+      NSForegroundColorAttributeName : [NSColor labelColor]
+    };
+    [@"2D Vector Canvas (cmn_view_t)" drawAtPoint:NSMakePoint(20, 16)
+                                   withAttributes:attrs];
+    [[NSColor gridColor] setStroke];
+    NSFrameRect(b);
+  } else if (self.hdr != NULL && self.hdr->kind == CMN_WIDGET_KIND_WEBVIEW) {
+    cmn_webview_t *wv = (cmn_webview_t *)self.hdr;
+    [[NSColor whiteColor] setFill];
+    NSRectFill(b);
+    [[NSColor colorWithCalibratedWhite:0.93 alpha:1.0] setFill];
+    NSRectFill(NSMakeRect(0, b.size.height - 28, b.size.width, 28));
+    NSString *urlStr = (wv->url[0] != '\0')
+                           ? [NSString stringWithUTF8String:wv->url]
+                           : @"https://cmn.dev/docs";
+    NSDictionary *barAttrs = @{
+      NSFontAttributeName : [NSFont systemFontOfSize:11.0],
+      NSForegroundColorAttributeName : [NSColor secondaryLabelColor]
+    };
+    [[NSString stringWithFormat:@"URL: %@", urlStr]
+           drawAtPoint:NSMakePoint(10, b.size.height - 21)
+        withAttributes:barAttrs];
+    NSDictionary *titleAttrs = @{
+      NSFontAttributeName : [NSFont boldSystemFontOfSize:15.0],
+      NSForegroundColorAttributeName : [NSColor colorWithCalibratedRed:0.11
+                                                                 green:0.32
+                                                                  blue:0.62
+                                                                 alpha:1.0]
+    };
+    [@"cmn Embedded WebView Document"
+           drawAtPoint:NSMakePoint(14, b.size.height - 56)
+        withAttributes:titleAttrs];
+    NSDictionary *bodyAttrs = @{
+      NSFontAttributeName : [NSFont systemFontOfSize:12.0],
+      NSForegroundColorAttributeName : [NSColor darkGrayColor]
+    };
+    NSString *bodyStr = (wv->html[0] != '\0')
+                            ? [NSString stringWithUTF8String:wv->html]
+                            : @"Rendered HTML5 content inside native WebView.";
+    [bodyStr
+            drawInRect:NSMakeRect(14, 10, b.size.width - 28, b.size.height - 72)
+        withAttributes:bodyAttrs];
+    [[NSColor gridColor] setStroke];
+    NSFrameRect(b);
+  } else if (self.hdr != NULL && self.hdr->kind == CMN_WIDGET_KIND_TABS) {
+    cmn_tabs_t *tb = (cmn_tabs_t *)self.hdr;
+    uint32_t i;
+    CGFloat x = 12.0;
+    [[NSColor colorWithCalibratedWhite:0.96 alpha:1.0] setFill];
+    NSRectFill(NSMakeRect(0, 0, b.size.width, b.size.height - 28));
+    [[NSColor gridColor] setStroke];
+    NSFrameRect(NSMakeRect(0, 0, b.size.width, b.size.height - 28));
+    for (i = 0; i < tb->count; ++i) {
+      BOOL sel = (i == tb->selected);
+      NSString *t = [NSString stringWithUTF8String:tb->titles[i]];
+      NSRect tabRect = NSMakeRect(x, b.size.height - 28, 96, 26);
+      [(sel ? [NSColor whiteColor]
+            : [NSColor colorWithCalibratedWhite:0.90 alpha:1.0]) setFill];
+      NSRectFill(tabRect);
+      [[NSColor gridColor] setStroke];
+      NSFrameRect(tabRect);
+      NSDictionary *tAttrs = @{
+        NSFontAttributeName : sel ? [NSFont boldSystemFontOfSize:12.0]
+                                  : [NSFont systemFontOfSize:12.0],
+        NSForegroundColorAttributeName : sel
+            ? [NSColor colorWithCalibratedRed:0.12
+                                        green:0.38
+                                         blue:0.78
+                                        alpha:1.0]
+            : [NSColor darkGrayColor]
+      };
+      [t drawAtPoint:NSMakePoint(x + 16, b.size.height - 22)
+          withAttributes:tAttrs];
+      x += 98.0;
+    }
+    NSDictionary *cAttrs = @{
+      NSFontAttributeName : [NSFont systemFontOfSize:13.0],
+      NSForegroundColorAttributeName : [NSColor labelColor]
+    };
+    [@"General Workspace Settings & Preferences"
+           drawAtPoint:NSMakePoint(18, b.size.height - 68)
+        withAttributes:cAttrs];
+  } else if (self.hdr != NULL && self.hdr->kind == CMN_WIDGET_KIND_SPLITVIEW) {
+    cmn_splitview_t *sv = (cmn_splitview_t *)self.hdr;
+    CGFloat splitX = b.size.width * (sv->pos > 0.05 ? sv->pos : 0.45);
+    [[NSColor colorWithCalibratedRed:0.97 green:0.98 blue:0.99
+                               alpha:1.0] setFill];
+    NSRectFill(NSMakeRect(0, 0, splitX - 2, b.size.height));
+    [[NSColor colorWithCalibratedRed:0.94 green:0.96 blue:0.98
+                               alpha:1.0] setFill];
+    NSRectFill(
+        NSMakeRect(splitX + 2, 0, b.size.width - splitX - 2, b.size.height));
+    [[NSColor colorWithCalibratedWhite:0.72 alpha:1.0] setFill];
+    NSRectFill(NSMakeRect(splitX - 2, 0, 4, b.size.height));
+    NSDictionary *pAttrs = @{
+      NSFontAttributeName : [NSFont boldSystemFontOfSize:12.5],
+      NSForegroundColorAttributeName : [NSColor labelColor]
+    };
+    [@"Navigation Tree" drawAtPoint:NSMakePoint(14, b.size.height - 32)
+                     withAttributes:pAttrs];
+    [@"Detail Inspector Pane\nSplit Ratio: 45% / 55%"
+            drawInRect:NSMakeRect(splitX + 16, 14, b.size.width - splitX - 28,
+                                  b.size.height - 28)
+        withAttributes:pAttrs];
+    [[NSColor gridColor] setStroke];
+    NSFrameRect(b);
+  }
+}
+@end
+
+/**
+ * @brief Backend hook creating the native OS control for an extended widget.
+ * @param hdr Initialized widget header.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_backend_widget_init(cmn_widget_header_t *hdr) {
+  if (hdr == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  @autoreleasepool {
+    NSView *view = nil;
+    NSRect frame = NSMakeRect(0, 0, hdr->bounds.width, hdr->bounds.height);
+    switch (hdr->kind) {
+    case CMN_WIDGET_KIND_CHECKBOX: {
+      NSButton *btn = [[NSButton alloc] initWithFrame:frame];
+      [btn setButtonType:NSButtonTypeSwitch];
+      [btn setTitle:@""];
+      view = btn;
+      break;
+    }
+    case CMN_WIDGET_KIND_RADIOBUTTON: {
+      NSButton *btn = [[NSButton alloc] initWithFrame:frame];
+      [btn setButtonType:NSButtonTypeRadio];
+      [btn setTitle:@""];
+      view = btn;
+      break;
+    }
+    case CMN_WIDGET_KIND_TOGGLEBUTTON: {
+      NSButton *btn = [[NSButton alloc] initWithFrame:frame];
+      [btn setButtonType:NSButtonTypePushOnPushOff];
+      [btn setBezelStyle:NSBezelStyleRounded];
+      [btn setTitle:@""];
+      view = btn;
+      break;
+    }
+    case CMN_WIDGET_KIND_LINE: {
+      NSBox *box = [[NSBox alloc] initWithFrame:frame];
+      [box setBoxType:NSBoxSeparator];
+      view = box;
+      break;
+    }
+    case CMN_WIDGET_KIND_SLIDER: {
+      NSSlider *slider = [[NSSlider alloc] initWithFrame:frame];
+      [slider setMinValue:0.0];
+      [slider setMaxValue:1.0];
+      [slider setDoubleValue:0.0];
+      view = slider;
+      break;
+    }
+    case CMN_WIDGET_KIND_PROGRESS: {
+      NSProgressIndicator *prog =
+          [[NSProgressIndicator alloc] initWithFrame:frame];
+      [prog setStyle:NSProgressIndicatorStyleBar];
+      [prog setIndeterminate:NO];
+      [prog setMinValue:0.0];
+      [prog setMaxValue:1.0];
+      [prog setDoubleValue:0.0];
+      view = prog;
+      break;
+    }
+    case CMN_WIDGET_KIND_UPDOWN: {
+      NSStepper *stepper = [[NSStepper alloc] initWithFrame:frame];
+      [stepper setMinValue:-1000000.0];
+      [stepper setMaxValue:1000000.0];
+      [stepper setIncrement:1.0];
+      view = stepper;
+      break;
+    }
+    case CMN_WIDGET_KIND_POPUP: {
+      NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:frame
+                                                        pullsDown:NO];
+      view = popup;
+      break;
+    }
+    case CMN_WIDGET_KIND_COMBO: {
+      NSComboBox *combo = [[NSComboBox alloc] initWithFrame:frame];
+      view = combo;
+      break;
+    }
+    case CMN_WIDGET_KIND_LISTBOX:
+    case CMN_WIDGET_KIND_TABLEVIEW: {
+      NSScrollView *sv = [[NSScrollView alloc] initWithFrame:frame];
+      NSTextView *tv = [[NSTextView alloc] initWithFrame:frame];
+      [tv setEditable:NO];
+      [tv setFont:[NSFont userFixedPitchFontOfSize:12.0]];
+      [sv setDocumentView:tv];
+      [sv setHasVerticalScroller:YES];
+      [sv setBorderType:NSBezelBorder];
+      view = sv;
+      break;
+    }
+    case CMN_WIDGET_KIND_IMAGEVIEW: {
+      NSImageView *iv = [[NSImageView alloc] initWithFrame:frame];
+      [iv setImageFrameStyle:NSImageFramePhoto];
+      [iv setImageScaling:NSImageScaleProportionallyUpOrDown];
+      view = iv;
+      break;
+    }
+    case CMN_WIDGET_KIND_VIEW:
+    case CMN_WIDGET_KIND_WEBVIEW:
+    case CMN_WIDGET_KIND_TABS:
+    case CMN_WIDGET_KIND_SPLITVIEW: {
+      CmnCustomDrawView *cv = [[CmnCustomDrawView alloc] initWithFrame:frame];
+      cv.hdr = hdr;
+      view = cv;
+      break;
+    }
+    case CMN_WIDGET_KIND_PANEL: {
+      NSBox *box = [[NSBox alloc] initWithFrame:frame];
+      [box setTitle:@"Panel Container (cmn_panel_t)"];
+      [box setBoxType:NSBoxPrimary];
+      view = box;
+      break;
+    }
+    default:
+      break;
+    }
+    if (view != nil) {
+      hdr->native_handle = (__bridge_retained void *)view;
+    }
+  }
+  return CMN_SUCCESS;
+}
+
+/**
+ * @brief Backend hook synchronizing state changes to the native OS control.
+ * @param hdr Widget header whose concrete state was modified.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_backend_widget_sync(cmn_widget_header_t *hdr) {
+  if (hdr == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  if (hdr->native_handle == NULL) {
+    return CMN_SUCCESS;
+  }
+  @autoreleasepool {
+    NSView *view = (__bridge NSView *)hdr->native_handle;
+    switch (hdr->kind) {
+    case CMN_WIDGET_KIND_CHECKBOX: {
+      cmn_checkbox_t *cb = (cmn_checkbox_t *)hdr;
+      NSButton *btn = (NSButton *)view;
+      [btn setAllowsMixedState:(cb->is_tristate ? YES : NO)];
+      [btn setTitle:[NSString stringWithUTF8String:cb->text]];
+      [btn setState:(cb->state == CMN_CHECK_ON)
+                        ? NSControlStateValueOn
+                        : ((cb->state == CMN_CHECK_MIXED)
+                               ? NSControlStateValueMixed
+                               : NSControlStateValueOff)];
+      break;
+    }
+    case CMN_WIDGET_KIND_RADIOBUTTON: {
+      cmn_radiobutton_t *rb = (cmn_radiobutton_t *)hdr;
+      NSButton *btn = (NSButton *)view;
+      [btn setTitle:[NSString stringWithUTF8String:rb->text]];
+      [btn setState:(rb->selected ? NSControlStateValueOn
+                                  : NSControlStateValueOff)];
+      break;
+    }
+    case CMN_WIDGET_KIND_TOGGLEBUTTON: {
+      cmn_togglebutton_t *tb = (cmn_togglebutton_t *)hdr;
+      NSButton *btn = (NSButton *)view;
+      [btn setTitle:[NSString stringWithUTF8String:tb->text]];
+      [btn setState:(tb->toggled ? NSControlStateValueOn
+                                 : NSControlStateValueOff)];
+      break;
+    }
+    case CMN_WIDGET_KIND_SLIDER: {
+      cmn_slider_t *sl = (cmn_slider_t *)hdr;
+      NSSlider *slider = (NSSlider *)view;
+      [slider setDoubleValue:sl->value];
+      [slider setNumberOfTickMarks:(NSInteger)sl->steps];
+      break;
+    }
+    case CMN_WIDGET_KIND_PROGRESS: {
+      cmn_progress_t *pr = (cmn_progress_t *)hdr;
+      NSProgressIndicator *prog = (NSProgressIndicator *)view;
+      [prog setIndeterminate:(pr->indeterminate ? YES : NO)];
+      [prog setDoubleValue:pr->value];
+      break;
+    }
+    case CMN_WIDGET_KIND_UPDOWN: {
+      cmn_updown_t *ud = (cmn_updown_t *)hdr;
+      NSStepper *stepper = (NSStepper *)view;
+      [stepper setIncrement:ud->step];
+      [stepper setDoubleValue:ud->value];
+      break;
+    }
+    case CMN_WIDGET_KIND_POPUP: {
+      cmn_popup_t *pu = (cmn_popup_t *)hdr;
+      NSPopUpButton *popup = (NSPopUpButton *)view;
+      uint32_t i;
+      [popup removeAllItems];
+      for (i = 0; i < pu->count; ++i) {
+        [popup addItemWithTitle:[NSString stringWithUTF8String:pu->items[i]]];
+      }
+      if (pu->selected < pu->count) {
+        [popup selectItemAtIndex:(NSInteger)pu->selected];
+      }
+      break;
+    }
+    case CMN_WIDGET_KIND_COMBO: {
+      cmn_combo_t *co = (cmn_combo_t *)hdr;
+      NSComboBox *combo = (NSComboBox *)view;
+      uint32_t i;
+      [combo removeAllItems];
+      for (i = 0; i < co->count; ++i) {
+        [combo addItemWithObjectValue:[NSString
+                                          stringWithUTF8String:co->items[i]]];
+      }
+      [combo setStringValue:[NSString stringWithUTF8String:co->text]];
+      break;
+    }
+    case CMN_WIDGET_KIND_LISTBOX: {
+      cmn_listbox_t *lb = (cmn_listbox_t *)hdr;
+      NSScrollView *sv = (NSScrollView *)view;
+      NSTextView *tv = (NSTextView *)[sv documentView];
+      NSMutableString *ms = [NSMutableString string];
+      uint32_t i;
+      for (i = 0; i < lb->count; ++i) {
+        NSString *prefix = @"  ";
+        if (lb->checkable) {
+          prefix = lb->checked[i] ? @"[x] " : @"[ ] ";
+        } else if (i == lb->selected) {
+          prefix = @"> ";
+        }
+        [ms appendFormat:@"%@%s\n", prefix, lb->items[i]];
+      }
+      [tv setString:ms];
+      break;
+    }
+    case CMN_WIDGET_KIND_TABLEVIEW: {
+      cmn_tableview_t *tbl = (cmn_tableview_t *)hdr;
+      NSScrollView *sv = (NSScrollView *)view;
+      NSTextView *tv = (NSTextView *)[sv documentView];
+      NSMutableString *ms = [NSMutableString string];
+      uint32_t r, c;
+      for (c = 0; c < tbl->col_count; ++c) {
+        [ms appendFormat:@"%-16s", tbl->col_titles[c]];
+      }
+      [ms appendString:@"\n------------------------------------------------\n"];
+      for (r = 0; r < tbl->row_count; ++r) {
+        [ms appendString:(r == tbl->selected_row) ? @"> " : @"  "];
+        for (c = 0; c < tbl->col_count; ++c) {
+          [ms appendFormat:@"%-16s", tbl->cells[r][c]];
+        }
+        [ms appendString:@"\n"];
+      }
+      [tv setString:ms];
+      break;
+    }
+    case CMN_WIDGET_KIND_IMAGEVIEW: {
+      cmn_imageview_t *iv_model = (cmn_imageview_t *)hdr;
+      NSImageView *iv = (NSImageView *)view;
+      NSImage *img = nil;
+      if (iv_model->image_path[0] != '\0') {
+        img = [[NSImage alloc]
+            initWithContentsOfFile:[NSString stringWithUTF8String:iv_model->
+                                                                  image_path]];
+      }
+      if (img == nil) {
+        NSSize sz = NSMakeSize(160, 100);
+        img = [[NSImage alloc] initWithSize:sz];
+        [img lockFocus];
+        [[NSColor colorWithCalibratedRed:0.18 green:0.44 blue:0.78
+                                   alpha:1.0] setFill];
+        NSRectFill(NSMakeRect(0, 0, sz.width, sz.height));
+        [[NSColor colorWithCalibratedRed:0.95 green:0.76 blue:0.22
+                                   alpha:1.0] setFill];
+        [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(110, 56, 30, 30)]
+            fill];
+        [[NSColor colorWithCalibratedRed:0.22 green:0.66 blue:0.45
+                                   alpha:1.0] setFill];
+        NSRectFill(NSMakeRect(0, 0, sz.width, 32));
+        [img unlockFocus];
+      }
+      [iv setImage:img];
+      break;
+    }
+    default:
+      [view setNeedsDisplay:YES];
+      break;
+    }
+  }
+  return CMN_SUCCESS;
+}
+
+/**
+ * @brief Backend hook destroying the native OS control of an extended widget.
+ * @param hdr Widget header being destroyed.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_backend_widget_cleanup(cmn_widget_header_t *hdr) {
+  if (hdr == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  if (hdr->native_handle != NULL) {
+    @autoreleasepool {
+      NSView *view = (__bridge_transfer NSView *)hdr->native_handle;
+      [view removeFromSuperview];
+      hdr->native_handle = NULL;
+    }
+  }
+  return CMN_SUCCESS;
 }

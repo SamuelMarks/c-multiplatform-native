@@ -41,26 +41,27 @@ static cmn_error_e factory_capture_params(void *userdata, const char **params,
                                           void **out_widget) {
   struct captured_route_params_s *cap =
       (struct captured_route_params_s *)userdata;
+  cmn_error_e rc = CMN_SUCCESS;
   *out_widget = NULL;
 
   if (cap != NULL) {
     cap->count = param_count;
     if (param_count > 0 && params[0] != NULL) {
-      (void)cmn_strcpy_s(cap->p0, sizeof(cap->p0), params[0]);
+      rc = cmn_strcpy_s(cap->p0, sizeof(cap->p0), params[0]);
     }
-    if (param_count > 1 && params[1] != NULL) {
-      (void)cmn_strcpy_s(cap->p1, sizeof(cap->p1), params[1]);
+    if (param_count > 1 && params[1] != NULL && rc == CMN_SUCCESS) {
+      rc = cmn_strcpy_s(cap->p1, sizeof(cap->p1), params[1]);
     }
-    if (cap->create_widget) {
+    if (cap->create_widget && rc == CMN_SUCCESS) {
       cmn_label_t *lbl = NULL;
-      cmn_error_e rc = cmn_label_create(&lbl);
+      rc = cmn_label_create(&lbl);
       if (rc != CMN_SUCCESS) {
         return rc;
       }
       *out_widget = lbl;
     }
   }
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -73,10 +74,9 @@ static cmn_error_e factory_capture_params(void *userdata, const char **params,
  */
 static cmn_error_e factory_fail(void *userdata, const char **params,
                                 size_t param_count, void **out_widget) {
-  (void)userdata;
-  (void)params;
-  (void)param_count;
-  *out_widget = NULL;
+  if (out_widget != NULL) {
+    *out_widget = (param_count > 0 && params != NULL) ? userdata : NULL;
+  }
   return CMN_ERR_IO;
 }
 
@@ -183,9 +183,9 @@ TEST test_router_oom(void) {
 
   ASSERT_EQ(CMN_SUCCESS, cmn_vbox_create(&container));
 
-  (void)cmn_mock_alloc_set(1, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 0));
   ASSERT_EQ(CMN_ERR_NOMEM, cmn_router_create(container, &router));
-  (void)cmn_mock_alloc_set(0, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
 
   ASSERT_EQ(CMN_SUCCESS, cmn_router_create(container, &router));
 

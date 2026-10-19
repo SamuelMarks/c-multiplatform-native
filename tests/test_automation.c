@@ -144,14 +144,14 @@ TEST test_automation_capture_screenshot(void) {
 
   ASSERT_EQ(CMN_SUCCESS, cmn_automation_capture_screenshot(win, out_path));
 #if defined(_MSC_VER)
-  (void)fopen_s(&fp, out_path, "rb");
+  ASSERT_EQ(0, fopen_s(&fp, out_path, "rb"));
 #else
   fp = fopen(out_path, "rb");
 #endif
   ASSERT_NEQ((void *)NULL, fp);
   if (fp != NULL) {
     fclose(fp);
-    (void)remove(out_path);
+    ASSERT_EQ(0, remove(out_path));
   }
 
   ASSERT_EQ(CMN_SUCCESS, cmn_window_destroy(&win));

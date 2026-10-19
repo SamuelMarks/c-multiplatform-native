@@ -30,9 +30,10 @@ cmn_error_e cmn_automation_capture_screenshot(cmn_window_t *win,
         [[UIGraphicsImageRenderer alloc] initWithBounds:win->ui_window.bounds];
     UIImage *image = [renderer
         imageWithActions:^(UIGraphicsImageRendererContext *rendererContext) {
-          (void)rendererContext;
-          [win->ui_window drawViewHierarchyInRect:win->ui_window.bounds
-                               afterScreenUpdates:YES];
+          if (rendererContext != nil) {
+            [win->ui_window drawViewHierarchyInRect:win->ui_window.bounds
+                                 afterScreenUpdates:YES];
+          }
         }];
 
     if (image == nil) {

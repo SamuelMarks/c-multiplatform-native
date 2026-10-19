@@ -66,11 +66,10 @@ cmn_error_e cmn_app_run(cmn_app_t *app) {
 #ifndef CMN_TESTING
   emscripten_set_main_loop_arg(
       (em_arg_callback_func)cmn_emscripten_loop_iteration, app, 0, 1);
-#else
-  (void)cmn_emscripten_loop_iteration;
-#endif
-
   return CMN_SUCCESS;
+#else
+  return cmn_emscripten_loop_iteration(app);
+#endif
 }
 
 /**
@@ -120,10 +119,14 @@ static cmn_error_e cmn_web_async_task_adapter(void *arg) {
   struct web_task_payload_s *payload = (struct web_task_payload_s *)arg;
   cmn_error_e rc = CMN_SUCCESS;
   if (payload != NULL) {
+    cmn_error_e free_rc;
     if (payload->task != NULL) {
       rc = payload->task(payload->userdata);
     }
-    (void)cmn_free((void **)&payload);
+    free_rc = cmn_free((void **)&payload);
+    if (rc == CMN_SUCCESS) {
+      rc = free_rc;
+    }
   }
   return rc;
 }
@@ -142,8 +145,17 @@ cmn_error_e cmn_app_post_task(cmn_app_t *app, cmn_error_e (*task)(void *),
   }
 
 #ifdef CMN_TESTING
-  (void)cmn_web_async_task_adapter;
-  return task(userdata);
+  {
+    struct web_task_payload_s *payload = NULL;
+    cmn_error_e rc =
+        cmn_malloc(sizeof(struct web_task_payload_s), (void **)&payload);
+    if (rc != CMN_SUCCESS) {
+      return rc;
+    }
+    payload->task = task;
+    payload->userdata = userdata;
+    return cmn_web_async_task_adapter(payload);
+  }
 #else
   {
     struct web_task_payload_s *payload = NULL;

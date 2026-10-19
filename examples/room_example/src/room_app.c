@@ -71,77 +71,111 @@ cmn_error_e room_example_run(int32_t *out_found_id) {
   rc = cmn_room_db_execute(
       db, "CREATE TABLE tasks (id INTEGER PRIMARY KEY, title TEXT)");
 
-  rc = cmn_room_dao_create(db, &meta, &dao);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_room_dao_create(db, &meta, &dao);
+  }
   if (rc != CMN_SUCCESS) {
     cmn_error_e db_rc = cmn_room_db_destroy(&db);
-    (void)db_rc;
-    return rc;
+    return (db_rc != CMN_SUCCESS) ? db_rc : rc;
   }
 
   task_in.id = 1;
   task_in.title = "Implement Room in C89";
   rc = cmn_room_dao_insert(dao, &task_in);
-  rc = cmn_room_dao_find_by_id_int32(dao, 1, &task_out);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_room_dao_find_by_id_int32(dao, 1, &task_out);
+  }
 
-  rc = cmn_grid_create(&grid);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_grid_create(&grid);
+  }
   if (rc != CMN_SUCCESS) {
     goto cleanup;
   }
   grid_cols[0].unit = CMN_GRID_UNIT_FR;
   grid_cols[0].value = 1.0f;
   rc = cmn_grid_set_columns(grid, grid_cols, 1);
-  rc = cmn_grid_set_gap(grid, 8, 8);
-  rc = cmn_grid_set_padding(grid, pad);
-  rc = cmn_grid_add_breakpoint(grid, 360, 1);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_grid_set_gap(grid, 8, 8);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_grid_set_padding(grid, pad);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_grid_add_breakpoint(grid, 360, 1);
+  }
 
-  rc = cmn_flex_create(&row_flex);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_flex_create(&row_flex);
+  }
   if (rc != CMN_SUCCESS) {
     goto cleanup;
   }
   rc = cmn_flex_set_direction(row_flex, CMN_FLEX_ROW);
-  rc = cmn_flex_set_gap(row_flex, 8, 12);
-  rc = cmn_flex_add_breakpoint(row_flex, 360, CMN_FLEX_COLUMN, CMN_FLEX_NOWRAP);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_flex_set_gap(row_flex, 8, 12);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_flex_add_breakpoint(row_flex, 360, CMN_FLEX_COLUMN,
+                                 CMN_FLEX_NOWRAP);
+  }
 
-  rc = cmn_label_create(&lbl_id);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_label_create(&lbl_id);
+  }
   if (rc != CMN_SUCCESS) {
     goto cleanup;
   }
   rc = cmn_sprintf_s(id_buf, sizeof(id_buf), "#" CMN_INT32_FMT,
                      (int)task_out.id);
-  rc = cmn_label_set_text(lbl_id, id_buf);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_label_set_text(lbl_id, id_buf);
+  }
 
-  rc = cmn_label_create(&lbl_title);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_label_create(&lbl_title);
+  }
   if (rc != CMN_SUCCESS) {
     goto cleanup;
   }
   rc = cmn_label_set_text(lbl_title,
                           task_out.title != NULL ? task_out.title : "");
 
-  rc = cmn_flex_add_child(row_flex, lbl_id, NULL);
-  rc = cmn_flex_item_style_init(&grow_style);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_flex_add_child(row_flex, lbl_id, NULL);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_flex_item_style_init(&grow_style);
+  }
   grow_style.flex_grow = 1.0f;
-  rc = cmn_flex_add_child(row_flex, lbl_title, &grow_style);
-  rc = cmn_grid_add_child(grid, row_flex, NULL);
-  rc = cmn_grid_compute_layout(grid, 480, 120);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_flex_add_child(row_flex, lbl_title, &grow_style);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_grid_add_child(grid, row_flex, NULL);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_grid_compute_layout(grid, 480, 120);
+  }
 
   *out_found_id = task_out.id;
 
 cleanup:
   if (lbl_title != NULL) {
     cmn_error_e clean_rc = cmn_label_destroy(&lbl_title);
-    (void)clean_rc;
+    rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
   }
   if (lbl_id != NULL) {
     cmn_error_e clean_rc = cmn_label_destroy(&lbl_id);
-    (void)clean_rc;
+    rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
   }
   if (row_flex != NULL) {
     cmn_error_e clean_rc = cmn_flex_destroy(&row_flex);
-    (void)clean_rc;
+    rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
   }
   if (grid != NULL) {
     cmn_error_e clean_rc = cmn_grid_destroy(&grid);
-    (void)clean_rc;
+    rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
   }
   if (task_out.title != NULL) {
     free(task_out.title);
@@ -149,8 +183,9 @@ cleanup:
   {
     cmn_error_e dao_rc = cmn_room_dao_destroy(&dao);
     cmn_error_e db_rc = cmn_room_db_destroy(&db);
-    (void)dao_rc;
-    (void)db_rc;
+    if (rc == CMN_SUCCESS) {
+      rc = (dao_rc != CMN_SUCCESS) ? dao_rc : db_rc;
+    }
   }
   return rc;
 }

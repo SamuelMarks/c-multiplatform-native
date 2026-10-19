@@ -24,25 +24,29 @@ login_view_data_t *g_login_data = NULL;
  */
 cmn_error_e login_view_cleanup(int destroy_root) {
   cmn_error_e rc = CMN_SUCCESS;
+  cmn_error_e clean_rc;
   if (g_login_data != NULL) {
     if (g_login_data->btn_submit != NULL) {
       rc = cmn_button_destroy(&g_login_data->btn_submit);
     }
     if (g_login_data->tb_password != NULL) {
-      rc = (cmn_error_e)((int)rc |
-                         (int)cmn_textbox_destroy(&g_login_data->tb_password));
+      clean_rc = cmn_textbox_destroy(&g_login_data->tb_password);
+      rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
     }
     if (g_login_data->tb_username != NULL) {
-      rc = (cmn_error_e)((int)rc |
-                         (int)cmn_textbox_destroy(&g_login_data->tb_username));
+      clean_rc = cmn_textbox_destroy(&g_login_data->tb_username);
+      rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
     }
     if (g_login_data->form != NULL) {
-      rc = (cmn_error_e)((int)rc | (int)cmn_form_destroy(&g_login_data->form));
+      clean_rc = cmn_form_destroy(&g_login_data->form);
+      rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
     }
     if (destroy_root && g_login_data->root != NULL) {
-      rc = (cmn_error_e)((int)rc | (int)cmn_grid_destroy(&g_login_data->root));
+      clean_rc = cmn_grid_destroy(&g_login_data->root);
+      rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
     }
-    rc = (cmn_error_e)((int)rc | (int)cmn_free((void **)&g_login_data));
+    clean_rc = cmn_free((void **)&g_login_data);
+    rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
   }
   return rc;
 }
@@ -57,9 +61,9 @@ cmn_error_e login_view_cleanup(int destroy_root) {
  */
 cmn_error_e validate_username(const char *val, void *userdata,
                               int *out_is_valid, char **out_err_msg) {
-  (void)userdata;
-  (void)out_err_msg;
-
+  if (out_err_msg != NULL) {
+    *out_err_msg = (char *)userdata;
+  }
   if (val != NULL && strlen(val) > 0) {
     *out_is_valid = 1;
   } else {
@@ -78,9 +82,9 @@ cmn_error_e validate_username(const char *val, void *userdata,
  */
 cmn_error_e validate_password(const char *val, void *userdata,
                               int *out_is_valid, char **out_err_msg) {
-  (void)userdata;
-  (void)out_err_msg;
-
+  if (out_err_msg != NULL) {
+    *out_err_msg = (char *)userdata;
+  }
   if (val != NULL && strlen(val) > 3) {
     *out_is_valid = 1;
   } else {
@@ -142,11 +146,14 @@ cmn_error_e login_view_factory(void *userdata, const char **params,
   login_view_data_t *data = NULL;
   cmn_edges_t pad = {20, 24, 20, 24};
 
-  (void)params;
-  (void)param_count;
+  if (params == NULL && param_count > 0) {
+    return CMN_ERR_INVAL;
+  }
 
   cleanup_rc = login_view_cleanup(0);
-  (void)cleanup_rc;
+  if (cleanup_rc != CMN_SUCCESS) {
+    return cleanup_rc;
+  }
 
   rc = cmn_calloc(1, sizeof(login_view_data_t), (void **)&data);
   if (rc != CMN_SUCCESS) {
@@ -158,50 +165,74 @@ cmn_error_e login_view_factory(void *userdata, const char **params,
   rc = cmn_grid_create(&data->root);
   if (rc != CMN_SUCCESS) {
     cleanup_rc = login_view_cleanup(1);
-    return rc != CMN_SUCCESS ? rc : cleanup_rc;
+    return (cleanup_rc != CMN_SUCCESS) ? cleanup_rc : rc;
   }
   rc = cmn_grid_set_auto_fit_columns(data->root, 260, 1);
-  rc = cmn_grid_set_gap(data->root, 12, 12);
-  rc = cmn_grid_set_padding(data->root, pad);
-  rc = cmn_grid_add_breakpoint(data->root, 400, 1);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_grid_set_gap(data->root, 12, 12);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_grid_set_padding(data->root, pad);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_grid_add_breakpoint(data->root, 400, 1);
+  }
 
-  rc = cmn_form_create(&data->form);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_form_create(&data->form);
+  }
   if (rc != CMN_SUCCESS) {
     cleanup_rc = login_view_cleanup(1);
-    return rc != CMN_SUCCESS ? rc : cleanup_rc;
+    return (cleanup_rc != CMN_SUCCESS) ? cleanup_rc : rc;
   }
 
   rc = cmn_textbox_create(&data->tb_username);
   if (rc != CMN_SUCCESS) {
     cleanup_rc = login_view_cleanup(1);
-    return rc != CMN_SUCCESS ? rc : cleanup_rc;
+    return (cleanup_rc != CMN_SUCCESS) ? cleanup_rc : rc;
   }
 
   rc = cmn_textbox_create(&data->tb_password);
   if (rc != CMN_SUCCESS) {
     cleanup_rc = login_view_cleanup(1);
-    return rc != CMN_SUCCESS ? rc : cleanup_rc;
+    return (cleanup_rc != CMN_SUCCESS) ? cleanup_rc : rc;
   }
   rc = cmn_textbox_set_password(data->tb_password, 1);
 
-  rc = cmn_form_add_input(data->form, data->tb_username, validate_username,
-                          NULL);
-  rc = cmn_form_add_input(data->form, data->tb_password, validate_password,
-                          NULL);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_form_add_input(data->form, data->tb_username, validate_username,
+                            NULL);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_form_add_input(data->form, data->tb_password, validate_password,
+                            NULL);
+  }
 
-  rc = cmn_button_create(&data->btn_submit);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_button_create(&data->btn_submit);
+  }
   if (rc != CMN_SUCCESS) {
     cleanup_rc = login_view_cleanup(1);
-    return rc != CMN_SUCCESS ? rc : cleanup_rc;
+    return (cleanup_rc != CMN_SUCCESS) ? cleanup_rc : rc;
   }
 
   rc = cmn_button_set_text(data->btn_submit, "Sign in/up");
-  rc = cmn_button_set_on_click(data->btn_submit, on_login_submit, data);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_button_set_on_click(data->btn_submit, on_login_submit, data);
+  }
 
-  rc = cmn_grid_add_child(data->root, data->tb_username, NULL);
-  rc = cmn_grid_add_child(data->root, data->tb_password, NULL);
-  rc = cmn_grid_add_child(data->root, data->btn_submit, NULL);
-  rc = cmn_grid_compute_layout(data->root, 480, 360);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_grid_add_child(data->root, data->tb_username, NULL);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_grid_add_child(data->root, data->tb_password, NULL);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_grid_add_child(data->root, data->btn_submit, NULL);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_grid_compute_layout(data->root, 480, 360);
+  }
 
   *out_widget = data->root;
   return rc;

@@ -123,13 +123,148 @@ typedef enum cmn_widget_kind_e {
   /** @brief Responsive CSS Flexbox-inspired layout container (`cmn_flex_t`). */
   CMN_WIDGET_KIND_FLEX = 10,
   /** @brief Responsive CSS Grid-inspired layout container (`cmn_grid_t`). */
-  CMN_WIDGET_KIND_GRID = 11
+  CMN_WIDGET_KIND_GRID = 11,
+  /** @brief Native checkbox or tri-state checkbox (`cmn_checkbox_t`). */
+  CMN_WIDGET_KIND_CHECKBOX = 12,
+  /** @brief Native radio button (`cmn_radiobutton_t`). */
+  CMN_WIDGET_KIND_RADIOBUTTON = 13,
+  /** @brief Native flat or toggle button (`cmn_togglebutton_t`). */
+  CMN_WIDGET_KIND_TOGGLEBUTTON = 14,
+  /** @brief Native horizontal or vertical separator line (`cmn_line_t`). */
+  CMN_WIDGET_KIND_LINE = 15,
+  /** @brief Native horizontal or vertical slider (`cmn_slider_t`). */
+  CMN_WIDGET_KIND_SLIDER = 16,
+  /** @brief Native progress bar (`cmn_progress_t`). */
+  CMN_WIDGET_KIND_PROGRESS = 17,
+  /** @brief Native stepper / up-down spin control (`cmn_updown_t`). */
+  CMN_WIDGET_KIND_UPDOWN = 18,
+  /** @brief Native drop-down pop-up selector (`cmn_popup_t`). */
+  CMN_WIDGET_KIND_POPUP = 19,
+  /** @brief Native editable combo box (`cmn_combo_t`). */
+  CMN_WIDGET_KIND_COMBO = 20,
+  /** @brief Native scrollable list box (`cmn_listbox_t`). */
+  CMN_WIDGET_KIND_LISTBOX = 21,
+  /** @brief Native image view control (`cmn_imageview_t`). */
+  CMN_WIDGET_KIND_IMAGEVIEW = 22,
+  /** @brief Native multi-column table view (`cmn_tableview_t`). */
+  CMN_WIDGET_KIND_TABLEVIEW = 23,
+  /** @brief Native custom 2D drawing view (`cmn_view_t`). */
+  CMN_WIDGET_KIND_VIEW = 24,
+  /** @brief Native embedded web browser view (`cmn_webview_t`). */
+  CMN_WIDGET_KIND_WEBVIEW = 25,
+  /** @brief Native grouping or scrollable panel container (`cmn_panel_t`). */
+  CMN_WIDGET_KIND_PANEL = 26,
+  /** @brief Native tabbed container (`cmn_tabs_t`). */
+  CMN_WIDGET_KIND_TABS = 27,
+  /** @brief Native horizontal or vertical split view (`cmn_splitview_t`). */
+  CMN_WIDGET_KIND_SPLITVIEW = 28,
+  /** @brief Native color picker dialog (`cmn_colorpicker_t`). */
+  CMN_WIDGET_KIND_COLORPICKER = 29
 } cmn_widget_kind_e;
+
+/**
+ * @brief Tri-state check enumeration (`CMN_CHECK_OFF`, `CMN_CHECK_ON`,
+ * `CMN_CHECK_MIXED`).
+ */
+typedef enum cmn_check_state_e {
+  /** @brief Unchecked / off state (`0`). */
+  CMN_CHECK_OFF = 0,
+  /** @brief Checked / on state (`1`). */
+  CMN_CHECK_ON = 1,
+  /** @brief Indeterminate / mixed state (`2`). */
+  CMN_CHECK_MIXED = 2
+} cmn_check_state_e;
+
+/**
+ * @brief Image scaling modes.
+ */
+typedef enum cmn_scale_mode_e {
+  /** @brief Automatic natural size scaling. */
+  CMN_SCALE_AUTO = 0,
+  /** @brief No scaling, unscaled centered image. */
+  CMN_SCALE_NONE = 1,
+  /** @brief Stretch to fill widget bounds. */
+  CMN_SCALE_ASPECT = 2,
+  /** @brief Uniformly fit preserving aspect ratio. */
+  CMN_SCALE_FIT = 3
+} cmn_scale_mode_e;
+
+/**
+ * @brief Mouse cursor shapes.
+ */
+typedef enum cmn_cursor_e {
+  /** @brief Standard arrow pointer cursor. */
+  CMN_CURSOR_ARROW = 0,
+  /** @brief Pointing hand cursor. */
+  CMN_CURSOR_HAND = 1,
+  /** @brief Text selection I-beam cursor. */
+  CMN_CURSOR_IBEAM = 2,
+  /** @brief Crosshair precision cursor. */
+  CMN_CURSOR_CROSS = 3,
+  /** @brief Horizontal resize cursor. */
+  CMN_CURSOR_SIZEWE = 4,
+  /** @brief Vertical resize cursor. */
+  CMN_CURSOR_SIZENS = 5
+} cmn_cursor_e;
+
+/**
+ * @brief File picker dialog operation modes.
+ */
+typedef enum cmn_filepicker_mode_e {
+  /** @brief Select an existing file to open. */
+  CMN_FILEPICKER_OPEN_FILE = 0,
+  /** @brief Choose a destination path to save a file. */
+  CMN_FILEPICKER_SAVE_FILE = 1,
+  /** @brief Select an existing directory folder. */
+  CMN_FILEPICKER_SELECT_DIR = 2
+} cmn_filepicker_mode_e;
+
+/**
+ * @brief Horizontal text alignment modes.
+ */
+typedef enum cmn_text_align_e {
+  /** @brief Left-aligned text. */
+  CMN_TEXT_ALIGN_LEFT = 0,
+  /** @brief Center-aligned text. */
+  CMN_TEXT_ALIGN_CENTER = 1,
+  /** @brief Right-aligned text. */
+  CMN_TEXT_ALIGN_RIGHT = 2,
+  /** @brief Justified text. */
+  CMN_TEXT_ALIGN_JUSTIFY = 3
+} cmn_text_align_e;
+
+/**
+ * @brief Clipboard operations for editable controls.
+ */
+typedef enum cmn_clipboard_op_e {
+  /** @brief Copy selection to clipboard. */
+  CMN_CLIPBOARD_COPY = 0,
+  /** @brief Cut selection to clipboard. */
+  CMN_CLIPBOARD_CUT = 1,
+  /** @brief Paste clipboard contents. */
+  CMN_CLIPBOARD_PASTE = 2
+} cmn_clipboard_op_e;
+
+/**
+ * @brief Font style flags.
+ */
+typedef enum cmn_font_style_e {
+  /** @brief Regular upright font style. */
+  CMN_FONT_STYLE_NORMAL = 0,
+  /** @brief Bold weight flag. */
+  CMN_FONT_STYLE_BOLD = 1,
+  /** @brief Italic slant flag. */
+  CMN_FONT_STYLE_ITALIC = 2,
+  /** @brief Underline decoration flag. */
+  CMN_FONT_STYLE_UNDERLINE = 4,
+  /** @brief Strikeout decoration flag. */
+  CMN_FONT_STYLE_STRIKEOUT = 8
+} cmn_font_style_e;
 
 /** @brief Opaque base handle for any UI widget. */
 typedef struct cmn_widget_s cmn_widget_t;
 /** @brief Opaque base handle for any UI container (window, vbox, hbox, flex,
- * grid). */
+ * grid, panel). */
 typedef struct cmn_container_s cmn_container_t;
 /** @brief Opaque handle for an application instance. */
 typedef struct cmn_app_s cmn_app_t;
@@ -137,12 +272,48 @@ typedef struct cmn_app_s cmn_app_t;
 typedef struct cmn_window_s cmn_window_t;
 /** @brief Opaque handle for a button widget. */
 typedef struct cmn_button_s cmn_button_t;
+/** @brief Opaque handle for a checkbox or tri-state checkbox widget. */
+typedef struct cmn_checkbox_s cmn_checkbox_t;
+/** @brief Opaque handle for a radio button widget. */
+typedef struct cmn_radiobutton_s cmn_radiobutton_t;
+/** @brief Opaque handle for a flat or toggle button widget. */
+typedef struct cmn_togglebutton_s cmn_togglebutton_t;
 /** @brief Opaque handle for a label widget. */
 typedef struct cmn_label_s cmn_label_t;
+/** @brief Opaque handle for a separator line widget. */
+typedef struct cmn_line_s cmn_line_t;
+/** @brief Opaque handle for a slider widget. */
+typedef struct cmn_slider_s cmn_slider_t;
+/** @brief Opaque handle for a progress bar widget. */
+typedef struct cmn_progress_s cmn_progress_t;
+/** @brief Opaque handle for a stepper / up-down widget. */
+typedef struct cmn_updown_s cmn_updown_t;
 /** @brief Opaque handle for a text box widget. */
 typedef struct cmn_textbox_s cmn_textbox_t;
 /** @brief Opaque handle for a multi-line scrollable text view widget. */
 typedef struct cmn_textview_s cmn_textview_t;
+/** @brief Opaque handle for a pop-up drop-down selector widget. */
+typedef struct cmn_popup_s cmn_popup_t;
+/** @brief Opaque handle for an editable combo box widget. */
+typedef struct cmn_combo_s cmn_combo_t;
+/** @brief Opaque handle for a scrollable list box widget. */
+typedef struct cmn_listbox_s cmn_listbox_t;
+/** @brief Opaque handle for an image view widget. */
+typedef struct cmn_imageview_s cmn_imageview_t;
+/** @brief Opaque handle for a multi-column table view widget. */
+typedef struct cmn_tableview_s cmn_tableview_t;
+/** @brief Opaque handle for a custom 2D drawing view widget. */
+typedef struct cmn_view_s cmn_view_t;
+/** @brief Opaque handle for an embedded web browser view widget. */
+typedef struct cmn_webview_s cmn_webview_t;
+/** @brief Opaque handle for a grouping or scrollable panel container. */
+typedef struct cmn_panel_s cmn_panel_t;
+/** @brief Opaque handle for a tabbed container widget. */
+typedef struct cmn_tabs_s cmn_tabs_t;
+/** @brief Opaque handle for a split view container widget. */
+typedef struct cmn_splitview_s cmn_splitview_t;
+/** @brief Opaque handle for a color picker dialog. */
+typedef struct cmn_colorpicker_s cmn_colorpicker_t;
 /** @brief Opaque handle for a vertical box layout. */
 typedef struct cmn_vbox_s cmn_vbox_t;
 /** @brief Opaque handle for a horizontal box layout. */

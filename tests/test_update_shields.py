@@ -44,9 +44,10 @@ def test_get_test_coverage_success():
 
 
 def test_get_test_coverage_zero_lines_triggers_build():
-    with patch("subprocess.run") as mock_run, patch(
-        "update-shields.ensure_coverage_data"
-    ) as mock_ensure:
+    with (
+        patch("subprocess.run") as mock_run,
+        patch("update-shields.ensure_coverage_data") as mock_ensure,
+    ):
         mock_res1 = MagicMock()
         mock_res1.returncode = 0
         mock_res1.stdout = "lines: 0.0% (0 out of 1129)\n"
@@ -316,12 +317,12 @@ def test_main(mock_update, mock_get_doc, mock_get_test):
 def test_main_execution():
     import runpy
 
-    with patch("subprocess.run") as mock_run, patch(
-        "subprocess.check_call"
-    ), patch("glob.glob", return_value=[]), patch(
-        "os.path.exists", return_value=False
-    ), patch(
-        "builtins.open", mock_open(read_data="# Title\n")
+    with (
+        patch("subprocess.run") as mock_run,
+        patch("subprocess.check_call"),
+        patch("glob.glob", return_value=[]),
+        patch("os.path.exists", return_value=False),
+        patch("builtins.open", mock_open(read_data="# Title\n")),
     ):
         mock_run.return_value.returncode = 0
         mock_run.return_value.stdout = "lines: 100.0%\n"

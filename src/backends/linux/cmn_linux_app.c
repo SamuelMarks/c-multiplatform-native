@@ -37,8 +37,8 @@ cmn_error_e cmn_app_create(cmn_app_t **out_app) {
   }
 
   if (!gtk_init_check(&argc, &argv)) {
-    (void)cmn_free((void **)&app);
-    return CMN_ERR_IO;
+    rc = cmn_free((void **)&app);
+    return rc != CMN_SUCCESS ? rc : CMN_ERR_IO;
   }
 
   app->is_running = 0;
@@ -112,10 +112,14 @@ static cmn_error_e cmn_linux_idle_task(gpointer user_data) {
   struct task_data *td = (struct task_data *)user_data;
   cmn_error_e rc = CMN_SUCCESS;
   if (td != NULL) {
+    cmn_error_e free_rc;
     if (td->task != NULL) {
       rc = td->task(td->userdata);
     }
-    (void)cmn_free((void **)&td);
+    free_rc = cmn_free((void **)&td);
+    if (rc == CMN_SUCCESS) {
+      rc = free_rc;
+    }
   }
   return rc;
 }
@@ -134,8 +138,16 @@ cmn_error_e cmn_app_post_task(cmn_app_t *app, cmn_error_e (*task)(void *),
   }
 
 #ifdef CMN_TESTING
-  (void)cmn_linux_idle_task;
-  return task(userdata);
+  {
+    struct task_data *td = NULL;
+    cmn_error_e rc = cmn_malloc(sizeof(struct task_data), (void **)&td);
+    if (rc != CMN_SUCCESS) {
+      return rc;
+    }
+    td->task = task;
+    td->userdata = userdata;
+    return cmn_linux_idle_task(td);
+  }
 #else
   {
     struct task_data *td = NULL;

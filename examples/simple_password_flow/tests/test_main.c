@@ -162,9 +162,9 @@ TEST test_login_submit_oom(void) {
   ASSERT_EQ(CMN_SUCCESS,
             cmn_textbox_set_text(g_login_data->tb_password, "password123"));
 
-  (void)cmn_mock_alloc_set(1, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 0));
   ASSERT_EQ(CMN_ERR_NOMEM, on_login_submit(g_login_data));
-  (void)cmn_mock_alloc_set(0, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
 
   ASSERT_EQ(CMN_SUCCESS, login_view_cleanup(1));
   ASSERT_EQ(CMN_SUCCESS, cmn_router_destroy(&router));
@@ -184,7 +184,7 @@ TEST test_login_submit_oom2(void) {
   void *widget = NULL;
   char long_username[300];
 
-  (void)cmn_mock_alloc_set(0, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
 
   ASSERT_EQ(CMN_SUCCESS, cmn_flex_create(&container));
   ASSERT_EQ(CMN_SUCCESS, cmn_router_create(container, &router));
@@ -284,9 +284,9 @@ TEST test_login_factory_oom(void) {
 
   for (i = 0; i < 10; i++) {
     cmn_error_e rc;
-    (void)cmn_mock_alloc_set(1, i);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, i));
     rc = login_view_factory(&state, NULL, 0, &widget);
-    (void)cmn_mock_alloc_set(0, 0);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
 
     if (rc == CMN_SUCCESS) {
       ASSERT_EQ(CMN_SUCCESS, login_view_cleanup(1));
@@ -351,9 +351,9 @@ TEST test_welcome_logout_oom(void) {
             cmn_router_register(router, "/login", login_view_factory, &state));
   ASSERT_EQ(CMN_SUCCESS, welcome_view_factory(&state, NULL, 0, &widget));
 
-  (void)cmn_mock_alloc_set(1, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 0));
   ASSERT_EQ(CMN_ERR_NOMEM, on_logout_click(g_welcome_data));
-  (void)cmn_mock_alloc_set(0, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
 
   ASSERT_EQ(CMN_SUCCESS, welcome_view_cleanup(1));
   ASSERT_EQ(CMN_SUCCESS, cmn_router_destroy(&router));
@@ -376,9 +376,9 @@ TEST test_welcome_factory_oom(void) {
 
   for (i = 0; i < 10; i++) {
     cmn_error_e rc;
-    (void)cmn_mock_alloc_set(1, i);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, i));
     rc = welcome_view_factory(&state, NULL, 0, &widget);
-    (void)cmn_mock_alloc_set(0, 0);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
 
     if (rc == CMN_SUCCESS) {
       ASSERT_EQ(CMN_SUCCESS, welcome_view_cleanup(1));
@@ -422,9 +422,9 @@ TEST test_app_main(void) {
 
   for (i = 0; i < 15; i++) {
     cmn_error_e rc;
-    (void)cmn_mock_alloc_set(1, i);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, i));
     rc = app_main();
-    (void)cmn_mock_alloc_set(0, 0);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
     if (rc == CMN_SUCCESS) {
       succeeded = 1;
       break;

@@ -92,9 +92,9 @@ extern cmn_error_e cmn_mock_vsnprintf_set(int fail);
 TEST test_sprintf_s_encoding_error(void) {
 #if !defined(_MSC_VER)
   char buf[64];
-  (void)cmn_mock_vsnprintf_set(1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_vsnprintf_set(1));
   ASSERT_EQ(CMN_ERR_IO, cmn_sprintf_s(buf, sizeof(buf), "Hello"));
-  (void)cmn_mock_vsnprintf_set(0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_vsnprintf_set(0));
 #endif
   PASS();
 }

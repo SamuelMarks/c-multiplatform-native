@@ -1,4 +1,5 @@
 /* clang-format off */
+#include "cmn_internal.h"
 #include "cmn/a11y_i18n.h"
 #include "cmn/string_safe.h"
 #include <stddef.h>
@@ -219,6 +220,7 @@ cmn_error_e cmn_a11y_set_role(void *widget, cmn_a11y_role_e role) {
   if (widget == NULL || role == CMN_A11Y_ROLE_NONE) {
     return CMN_ERR_INVAL;
   }
+  ((cmn_widget_header_t *)widget)->a11y_role = role;
   return CMN_SUCCESS;
 }
 
@@ -242,10 +244,10 @@ cmn_error_e cmn_a11y_set_label(void *widget, const char *label) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_a11y_set_tabindex(void *widget, int index) {
-  (void)index;
   if (widget == NULL) {
     return CMN_ERR_INVAL;
   }
+  ((cmn_widget_header_t *)widget)->a11y_tabindex = index;
   return CMN_SUCCESS;
 }
 

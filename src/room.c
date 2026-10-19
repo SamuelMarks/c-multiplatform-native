@@ -49,8 +49,8 @@ cmn_error_e cmn_room_db_create(const char *db_path, cmn_room_db_t **out_db) {
 
   orm_err = c_orm_sqlite_connect(db_path, &db->orm_db);
   if (orm_err != C_ORM_OK) {
-    (void)cmn_free((void **)&db);
-    return CMN_ERR_IO;
+    rc = cmn_free((void **)&db);
+    return rc != CMN_SUCCESS ? rc : CMN_ERR_IO;
   }
 
   *out_db = db;

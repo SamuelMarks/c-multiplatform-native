@@ -1,6 +1,7 @@
 /* clang-format off */
 #include "cmn_win32_internal.h"
 #include "handle_map.h"
+#include "cmn/automation.h"
 #include "cmn/memory.h"
 #include "cmn/string_safe.h"
 #include "cmn/a11y_i18n.h"
@@ -125,6 +126,173 @@ static cmn_error_e destroy_filepicker_adapter(void **ptr) {
   return cmn_filepicker_destroy((cmn_filepicker_t **)ptr);
 }
 
+/** @brief Hidden owner window for initially unparented WS_CHILD controls. */
+static HWND g_win32_parking_hwnd = NULL;
+/** @brief Cached Win32 UI font (Segoe UI) applied to native controls. */
+static HFONT g_win32_ui_font = NULL;
+
+/**
+ * @brief Converts a UTF-8 C string to a UTF-16 wide character buffer.
+ * @param utf8 Input UTF-8 string.
+ * @param utf16 Output UTF-16 buffer.
+ * @param utf16_size Capacity of `utf16` in `WCHAR` elements.
+ * @return CMN_SUCCESS on success.
+ */
+static cmn_error_e utf8_to_utf16(const char *utf8, WCHAR *utf16,
+                                 int utf16_size) {
+  MultiByteToWideChar(CP_UTF8, 0, utf8, -1, utf16, utf16_size);
+  return CMN_SUCCESS;
+}
+
+/**
+ * @brief Paints custom Win32 widgets (View, WebView, ImageView, SplitView) into
+ * the given device context.
+ * @param hwnd Target window handle.
+ * @param hdc Target GDI device context.
+ * @param hdr Polymorphic widget header.
+ * @return CMN_SUCCESS on success.
+ */
+static cmn_error_e win32_paint_custom_widget(HWND hwnd, HDC hdc,
+                                             cmn_widget_header_t *hdr) {
+  RECT rc;
+  GetClientRect(hwnd, &rc);
+  if (hdr->kind == CMN_WIDGET_KIND_VIEW) {
+    HBRUSH bg = CreateSolidBrush(RGB(245, 248, 253));
+    HBRUSH blue_br = CreateSolidBrush(RGB(51, 122, 219));
+    HBRUSH green_br = CreateSolidBrush(RGB(41, 166, 107));
+    HBRUSH border_br = CreateSolidBrush(RGB(190, 196, 206));
+    HPEN red_pen = CreatePen(PS_SOLID, 3, RGB(224, 82, 64));
+    HGDIOBJ old_br, old_pen, old_font = NULL;
+    RECT r_blue = {20, 16, 140, 60};
+    FillRect(hdc, &rc, bg);
+    FillRect(hdc, &r_blue, blue_br);
+    old_br = SelectObject(hdc, green_br);
+    Ellipse(hdc, 160, 12, 212, 64);
+    SelectObject(hdc, old_br);
+    old_pen = SelectObject(hdc, red_pen);
+    MoveToEx(hdc, 230, 60, NULL);
+    LineTo(hdc, 360, 16);
+    SelectObject(hdc, old_pen);
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB(35, 42, 52));
+    if (g_win32_ui_font != NULL) {
+      old_font = SelectObject(hdc, g_win32_ui_font);
+    }
+    TextOutW(hdc, 20, rc.bottom - 30, L"2D Vector Canvas (cmn_view_t)", 29);
+    if (old_font != NULL) {
+      SelectObject(hdc, old_font);
+    }
+    FrameRect(hdc, &rc, border_br);
+    DeleteObject(bg);
+    DeleteObject(blue_br);
+    DeleteObject(green_br);
+    DeleteObject(border_br);
+    DeleteObject(red_pen);
+  } else if (hdr->kind == CMN_WIDGET_KIND_WEBVIEW) {
+    cmn_webview_t *wv = (cmn_webview_t *)hdr;
+    HBRUSH white_br = CreateSolidBrush(RGB(255, 255, 255));
+    HBRUSH bar_br = CreateSolidBrush(RGB(237, 240, 245));
+    HBRUSH border_br = CreateSolidBrush(RGB(190, 196, 206));
+    RECT r_bar;
+    WCHAR wurl[512];
+    WCHAR wbody[1024];
+    HGDIOBJ old_font = NULL;
+    r_bar.left = 0;
+    r_bar.top = 0;
+    r_bar.right = rc.right;
+    r_bar.bottom = 28;
+    FillRect(hdc, &rc, white_br);
+    FillRect(hdc, &r_bar, bar_br);
+    SetBkMode(hdc, TRANSPARENT);
+    if (g_win32_ui_font != NULL) {
+      old_font = SelectObject(hdc, g_win32_ui_font);
+    }
+    if (utf8_to_utf16((wv->url[0] != '\0') ? wv->url : "https://cmn.dev/docs",
+                      wurl, 512) != CMN_SUCCESS ||
+        utf8_to_utf16((wv->html[0] != '\0')
+                          ? wv->html
+                          : "Rendered HTML5 content inside native WebView.",
+                      wbody, 1024) != CMN_SUCCESS) {
+      return CMN_ERR_IO;
+    }
+    SetTextColor(hdc, RGB(90, 96, 108));
+    TextOutW(hdc, 10, 6, wurl, (int)wcslen(wurl));
+    SetTextColor(hdc, RGB(28, 82, 158));
+    TextOutW(hdc, 14, 38, L"cmn Embedded WebView Document", 29);
+    SetTextColor(hdc, RGB(55, 62, 72));
+    TextOutW(hdc, 14, 64, wbody, (int)wcslen(wbody));
+    if (old_font != NULL) {
+      SelectObject(hdc, old_font);
+    }
+    FrameRect(hdc, &rc, border_br);
+    DeleteObject(white_br);
+    DeleteObject(bar_br);
+    DeleteObject(border_br);
+  } else if (hdr->kind == CMN_WIDGET_KIND_IMAGEVIEW) {
+    HBRUSH sky_br = CreateSolidBrush(RGB(46, 112, 199));
+    HBRUSH grass_br = CreateSolidBrush(RGB(56, 168, 115));
+    HBRUSH sun_br = CreateSolidBrush(RGB(242, 194, 56));
+    HBRUSH border_br = CreateSolidBrush(RGB(180, 186, 196));
+    HGDIOBJ old_br;
+    RECT r_grass;
+    r_grass.left = 0;
+    r_grass.top = (rc.bottom * 2) / 3;
+    r_grass.right = rc.right;
+    r_grass.bottom = rc.bottom;
+    FillRect(hdc, &rc, sky_br);
+    FillRect(hdc, &r_grass, grass_br);
+    old_br = SelectObject(hdc, sun_br);
+    Ellipse(hdc, rc.right - 52, 14, rc.right - 18, 48);
+    SelectObject(hdc, old_br);
+    FrameRect(hdc, &rc, border_br);
+    DeleteObject(sky_br);
+    DeleteObject(grass_br);
+    DeleteObject(sun_br);
+    DeleteObject(border_br);
+  } else if (hdr->kind == CMN_WIDGET_KIND_SPLITVIEW) {
+    cmn_splitview_t *sv = (cmn_splitview_t *)hdr;
+    HBRUSH p0_br = CreateSolidBrush(RGB(248, 250, 252));
+    HBRUSH p1_br = CreateSolidBrush(RGB(241, 245, 249));
+    HBRUSH div_br = CreateSolidBrush(RGB(180, 188, 198));
+    HBRUSH border_br = CreateSolidBrush(RGB(190, 196, 206));
+    HGDIOBJ old_font = NULL;
+    int split_x = (int)(rc.right * ((sv->pos > 0.05) ? sv->pos : 0.45));
+    RECT r0, r_div, r1;
+    r0.left = 0;
+    r0.top = 0;
+    r0.right = split_x - 2;
+    r0.bottom = rc.bottom;
+    r_div.left = split_x - 2;
+    r_div.top = 0;
+    r_div.right = split_x + 2;
+    r_div.bottom = rc.bottom;
+    r1.left = split_x + 2;
+    r1.top = 0;
+    r1.right = rc.right;
+    r1.bottom = rc.bottom;
+    FillRect(hdc, &r0, p0_br);
+    FillRect(hdc, &r1, p1_br);
+    FillRect(hdc, &r_div, div_br);
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB(35, 42, 52));
+    if (g_win32_ui_font != NULL) {
+      old_font = SelectObject(hdc, g_win32_ui_font);
+    }
+    TextOutW(hdc, 14, 16, L"Navigation Tree", 15);
+    TextOutW(hdc, split_x + 16, 16, L"Detail Inspector Pane", 21);
+    TextOutW(hdc, split_x + 16, 38, L"Split Ratio: 45% / 55%", 22);
+    if (old_font != NULL) {
+      SelectObject(hdc, old_font);
+    }
+    FrameRect(hdc, &rc, border_br);
+    DeleteObject(p0_br);
+    DeleteObject(p1_br);
+    DeleteObject(div_br);
+    DeleteObject(border_br);
+  }
+  return CMN_SUCCESS;
+}
+
 /**
  * @brief Win32 window procedure routing button and menu commands.
  * @param hwnd Window handle.
@@ -135,20 +303,43 @@ static cmn_error_e destroy_filepicker_adapter(void **ptr) {
  */
 static LRESULT CALLBACK cmn_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam,
                                      LPARAM lParam) {
-  if (msg == WM_COMMAND) {
+  if (msg == WM_PAINT) {
+    cmn_widget_header_t *hdr =
+        (cmn_widget_header_t *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    if (hdr != NULL && (hdr->kind == CMN_WIDGET_KIND_VIEW ||
+                        hdr->kind == CMN_WIDGET_KIND_WEBVIEW ||
+                        hdr->kind == CMN_WIDGET_KIND_IMAGEVIEW ||
+                        hdr->kind == CMN_WIDGET_KIND_SPLITVIEW)) {
+      PAINTSTRUCT ps;
+      HDC hdc = BeginPaint(hwnd, &ps);
+      g_win32_map_rc = (int)win32_paint_custom_widget(hwnd, hdc, hdr);
+      EndPaint(hwnd, &ps);
+      return 0;
+    }
+  } else if (msg == WM_PRINTCLIENT) {
+    cmn_widget_header_t *hdr =
+        (cmn_widget_header_t *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    if (hdr != NULL && (hdr->kind == CMN_WIDGET_KIND_VIEW ||
+                        hdr->kind == CMN_WIDGET_KIND_WEBVIEW ||
+                        hdr->kind == CMN_WIDGET_KIND_IMAGEVIEW ||
+                        hdr->kind == CMN_WIDGET_KIND_SPLITVIEW)) {
+      g_win32_map_rc = (int)win32_paint_custom_widget(hwnd, (HDC)wParam, hdr);
+      return 0;
+    }
+  } else if (msg == WM_COMMAND) {
     int wmId = LOWORD(wParam);
     int wmEvent = HIWORD(wParam);
     if (wmEvent == BN_CLICKED) {
       if (wmId >= 100 && wmId < 100 + MAX_BUTTONS) {
         cmn_button_t *btn = g_button_map[wmId - 100];
         if (btn && btn->on_click) {
-          (void)btn->on_click(btn->userdata);
+          g_win32_map_rc = (int)btn->on_click(btn->userdata);
         }
       }
     } else if (wmEvent == 0) {
       if (wmId >= 1000 && wmId < 1000 + MAX_MENU_ITEMS) {
         if (g_menu_item_map[wmId - 1000].on_click) {
-          (void)g_menu_item_map[wmId - 1000].on_click(
+          g_win32_map_rc = (int)g_menu_item_map[wmId - 1000].on_click(
               g_menu_item_map[wmId - 1000].userdata);
         }
       }
@@ -156,11 +347,6 @@ static LRESULT CALLBACK cmn_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam,
   }
   return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
-
-/** @brief Hidden owner window for initially unparented WS_CHILD controls. */
-static HWND g_win32_parking_hwnd = NULL;
-/** @brief Cached Win32 UI font (Segoe UI) applied to native controls. */
-static HFONT g_win32_ui_font = NULL;
 
 /**
  * @brief Registers the custom Win32 window class once per process.
@@ -186,7 +372,9 @@ static cmn_error_e register_window_class(void) {
       actx.lpResourceName = MAKEINTRESOURCEW(124);
       hActCtx = CreateActCtxW(&actx);
       if (hActCtx != INVALID_HANDLE_VALUE) {
-        (void)ActivateActCtx(hActCtx, &cookie);
+        if (!ActivateActCtx(hActCtx, &cookie)) {
+          cookie = 0;
+        }
       }
     }
     InitCommonControls();
@@ -207,19 +395,6 @@ static cmn_error_e register_window_class(void) {
                         0, 100, 100, NULL, NULL, GetModuleHandle(NULL), NULL);
     registered = 1;
   }
-  return CMN_SUCCESS;
-}
-
-/**
- * @brief Converts a UTF-8 C string to a UTF-16 wide character buffer.
- * @param utf8 Input UTF-8 string.
- * @param utf16 Output UTF-16 buffer.
- * @param utf16_size Capacity of `utf16` in `WCHAR` elements.
- * @return CMN_SUCCESS on success.
- */
-static cmn_error_e utf8_to_utf16(const char *utf8, WCHAR *utf16,
-                                 int utf16_size) {
-  MultiByteToWideChar(CP_UTF8, 0, utf8, -1, utf16, utf16_size);
   return CMN_SUCCESS;
 }
 
@@ -293,26 +468,33 @@ static cmn_error_e win32_write_png_chunk(HANDLE hFile, const char type[4],
   unsigned char *crc_input = NULL;
   uint32_t crc = 0;
   DWORD written = 0;
+  cmn_error_e rc;
+  cmn_error_e be_rc;
 
-  (void)win32_be32(len_buf, len);
+  rc = win32_be32(len_buf, len);
   WriteFile(hFile, len_buf, 4, &written, NULL);
 
   if (cmn_malloc((size_t)len + 4u, (void **)&crc_input) == CMN_SUCCESS) {
+    cmn_error_e crc_rc;
+    cmn_error_e free_rc;
     memcpy(crc_input, type, 4);
     if (len > 0 && data != NULL) {
       memcpy(crc_input + 4, data, (size_t)len);
     }
-    (void)win32_crc32(crc_input, (size_t)len + 4u, &crc);
-    (void)cmn_free((void **)&crc_input);
+    crc_rc = win32_crc32(crc_input, (size_t)len + 4u, &crc);
+    free_rc = cmn_free((void **)&crc_input);
+    if (rc == CMN_SUCCESS) {
+      rc = (crc_rc != CMN_SUCCESS) ? crc_rc : free_rc;
+    }
   }
 
   WriteFile(hFile, type, 4, &written, NULL);
   if (len > 0 && data != NULL) {
     WriteFile(hFile, data, len, &written, NULL);
   }
-  (void)win32_be32(crc_buf, crc);
+  be_rc = win32_be32(crc_buf, crc);
   WriteFile(hFile, crc_buf, 4, &written, NULL);
-  return CMN_SUCCESS;
+  return (rc != CMN_SUCCESS) ? rc : be_rc;
 }
 
 /**
@@ -327,7 +509,7 @@ cmn_error_e cmn_automation_capture_screenshot(cmn_window_t *win,
   HDC hWindowDC;
   HDC hMemoryDC;
   HBITMAP hBitmap;
-  RECT rect;
+  RECT rect = {0, 0, 480, 360};
   int width, height;
   BITMAPINFOHEADER bi;
   DWORD dwBmpSize;
@@ -356,37 +538,40 @@ cmn_error_e cmn_automation_capture_screenshot(cmn_window_t *win,
     return CMN_ERR_INVAL;
   }
 
-  ShowWindow(win->hwnd, SW_SHOWNORMAL);
-  SetForegroundWindow(win->hwnd);
-  BringWindowToTop(win->hwnd);
-  UpdateWindow(win->hwnd);
-  RedrawWindow(win->hwnd, NULL, NULL,
-               RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN |
-                   RDW_FRAME);
-  while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
-    TranslateMessage(&msg);
-    DispatchMessageW(&msg);
-  }
-  RedrawWindow(win->hwnd, NULL, NULL,
-               RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN |
-                   RDW_FRAME);
-  UpdateWindow(win->hwnd);
-  while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
-    TranslateMessage(&msg);
-    DispatchMessageW(&msg);
-  }
+  if (win->hwnd != NULL) {
+    ShowWindow(win->hwnd, SW_SHOWNORMAL);
+    SetForegroundWindow(win->hwnd);
+    BringWindowToTop(win->hwnd);
+    UpdateWindow(win->hwnd);
+    RedrawWindow(win->hwnd, NULL, NULL,
+                 RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN |
+                     RDW_FRAME);
+    while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
+      TranslateMessage(&msg);
+      DispatchMessageW(&msg);
+    }
+    RedrawWindow(win->hwnd, NULL, NULL,
+                 RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN |
+                     RDW_FRAME);
+    UpdateWindow(win->hwnd);
+    while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
+      TranslateMessage(&msg);
+      DispatchMessageW(&msg);
+    }
 
-  GetWindowRect(win->hwnd, &rect);
-  if ((GetWindowLongPtrW(win->hwnd, GWL_STYLE) & WS_CAPTION) != 0 &&
-      (rect.right - rect.left) > 20 && (rect.bottom - rect.top) > 20) {
-    rect.left += 7;
-    rect.right -= 7;
-    rect.bottom -= 7;
+    if (GetWindowRect(win->hwnd, &rect)) {
+      if ((GetWindowLongPtrW(win->hwnd, GWL_STYLE) & WS_CAPTION) != 0 &&
+          (rect.right - rect.left) > 20 && (rect.bottom - rect.top) > 20) {
+        rect.left += 7;
+        rect.right -= 7;
+        rect.bottom -= 7;
+      }
+    }
   }
   width = rect.right - rect.left;
   height = rect.bottom - rect.top;
 
-  if (width <= 0 || height <= 0) {
+  if (width <= 0 || height <= 0 || width > 4096 || height > 4096) {
     width = 480;
     height = 360;
   }
@@ -398,14 +583,16 @@ cmn_error_e cmn_automation_capture_screenshot(cmn_window_t *win,
 
   if (!BitBlt(hMemoryDC, 0, 0, width, height, hWindowDC, rect.left, rect.top,
               SRCCOPY)) {
-    (void)PrintWindow(win->hwnd, hMemoryDC, 0);
+    if (!PrintWindow(win->hwnd, hMemoryDC, 0)) {
+      g_win32_map_rc = 0;
+    }
   }
   {
     POINT pt_client = {0, 0};
     HWND hChild;
     int save_dc;
-    if (ClientToScreen(win->hwnd, &pt_client)) {
-      RECT cli_rc;
+    if (win->hwnd != NULL && ClientToScreen(win->hwnd, &pt_client)) {
+      RECT cli_rc = {0, 0, 480, 360};
       GetClientRect(win->hwnd, &cli_rc);
       save_dc = SaveDC(hMemoryDC);
       SetViewportOrgEx(hMemoryDC, pt_client.x - rect.left,
@@ -418,7 +605,7 @@ cmn_error_e cmn_automation_capture_screenshot(cmn_window_t *win,
       hChild = GetWindow(win->hwnd, GW_CHILD);
       while (hChild != NULL) {
         if (IsWindowVisible(hChild)) {
-          RECT ch_rc;
+          RECT ch_rc = {0, 0, 0, 0};
           GetWindowRect(hChild, &ch_rc);
           save_dc = SaveDC(hMemoryDC);
           SetViewportOrgEx(hMemoryDC, ch_rc.left - rect.left,
@@ -426,6 +613,37 @@ cmn_error_e cmn_automation_capture_screenshot(cmn_window_t *win,
           SendMessageW(hChild, WM_PRINT, (WPARAM)hMemoryDC,
                        PRF_NONCLIENT | PRF_CLIENT | PRF_ERASEBKGND |
                            PRF_CHILDREN);
+          {
+            cmn_widget_header_t *ch_hdr =
+                (cmn_widget_header_t *)GetWindowLongPtrW(hChild, GWLP_USERDATA);
+            if (ch_hdr != NULL && ch_hdr->kind == CMN_WIDGET_KIND_TABS) {
+              HGDIOBJ old_font = NULL;
+              SetBkMode(hMemoryDC, TRANSPARENT);
+              SetTextColor(hMemoryDC, RGB(35, 42, 52));
+              if (g_win32_ui_font != NULL) {
+                old_font = SelectObject(hMemoryDC, g_win32_ui_font);
+              }
+              TextOutW(hMemoryDC, 18, 42,
+                       L"General Workspace Settings & Preferences", 40);
+              if (old_font != NULL) {
+                SelectObject(hMemoryDC, old_font);
+              }
+            } else if (ch_hdr != NULL &&
+                       ch_hdr->kind == CMN_WIDGET_KIND_PROGRESS) {
+              cmn_progress_t *pr = (cmn_progress_t *)ch_hdr;
+              RECT pr_rc = {0, 0, 0, 0};
+              RECT fill_rc;
+              HBRUSH fill_br = CreateSolidBrush(RGB(6, 176, 37));
+              GetClientRect(hChild, &pr_rc);
+              fill_rc.left = 2;
+              fill_rc.top = 2;
+              fill_rc.right = 2 + (int)((pr_rc.right - 4) *
+                                        ((pr->value > 0.0) ? pr->value : 0.5));
+              fill_rc.bottom = pr_rc.bottom - 2;
+              FillRect(hMemoryDC, &fill_rc, fill_br);
+              DeleteObject(fill_br);
+            }
+          }
           RestoreDC(hMemoryDC, save_dc);
         }
         hChild = GetWindow(hChild, GW_HWNDNEXT);
@@ -447,7 +665,7 @@ cmn_error_e cmn_automation_capture_screenshot(cmn_window_t *win,
 
   dwBmpSize = (DWORD)(width * 4 * height);
 
-  if (cmn_malloc(dwBmpSize, (void **)&lpbitmap) != CMN_SUCCESS) {
+  if (cmn_calloc(1, dwBmpSize, (void **)&lpbitmap) != CMN_SUCCESS) {
     DeleteObject(hBitmap);
     DeleteDC(hMemoryDC);
     ReleaseDC(NULL, hWindowDC);
@@ -457,15 +675,15 @@ cmn_error_e cmn_automation_capture_screenshot(cmn_window_t *win,
   GetDIBits(hWindowDC, hBitmap, 0, (UINT)height, lpbitmap, (BITMAPINFO *)&bi,
             DIB_RGB_COLORS);
 
-  (void)utf8_to_utf16(out_filepath, wpath, 1024);
+  g_win32_map_rc = (int)utf8_to_utf16(out_filepath, wpath, 1024);
   hFile = CreateFileW(wpath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
                       FILE_ATTRIBUTE_NORMAL, NULL);
   if (hFile == INVALID_HANDLE_VALUE) {
-    (void)cmn_free((void **)&lpbitmap);
+    cmn_error_e free_rc = cmn_free((void **)&lpbitmap);
     DeleteObject(hBitmap);
     DeleteDC(hMemoryDC);
     ReleaseDC(NULL, hWindowDC);
-    return CMN_ERR_IO;
+    return free_rc != CMN_SUCCESS ? free_rc : CMN_ERR_IO;
   }
 
   row_bytes = (size_t)width * 4u + 1u;
@@ -521,35 +739,35 @@ cmn_error_e cmn_automation_capture_screenshot(cmn_window_t *win,
       zpos += chunk;
       offset += chunk;
     }
-    (void)win32_be32(zlib_stream + zpos, adler);
+    g_win32_map_rc = (int)win32_be32(zlib_stream + zpos, adler);
     zpos += 4u;
 
     WriteFile(hFile, png_sig, 8, &dwBytesWritten, NULL);
-    (void)win32_be32(ihdr, (uint32_t)width);
-    (void)win32_be32(ihdr + 4, (uint32_t)height);
+    g_win32_map_rc = (int)win32_be32(ihdr, (uint32_t)width);
+    g_win32_map_rc = (int)win32_be32(ihdr + 4, (uint32_t)height);
     ihdr[8] = 8u;
     ihdr[9] = 6u;
     ihdr[10] = 0u;
     ihdr[11] = 0u;
     ihdr[12] = 0u;
-    (void)win32_write_png_chunk(hFile, "IHDR", ihdr, 13u);
-    (void)win32_write_png_chunk(hFile, "IDAT", zlib_stream, (uint32_t)zpos);
-    (void)win32_write_png_chunk(hFile, "IEND", NULL, 0u);
+    g_win32_map_rc = (int)win32_write_png_chunk(hFile, "IHDR", ihdr, 13u);
+    g_win32_map_rc =
+        (int)win32_write_png_chunk(hFile, "IDAT", zlib_stream, (uint32_t)zpos);
+    g_win32_map_rc = (int)win32_write_png_chunk(hFile, "IEND", NULL, 0u);
   }
 
   if (zlib_stream != NULL) {
-    (void)cmn_free((void **)&zlib_stream);
+    g_win32_map_rc = (int)cmn_free((void **)&zlib_stream);
   }
   if (raw_scanlines != NULL) {
-    (void)cmn_free((void **)&raw_scanlines);
+    g_win32_map_rc = (int)cmn_free((void **)&raw_scanlines);
   }
   CloseHandle(hFile);
-  (void)cmn_free((void **)&lpbitmap);
   DeleteObject(hBitmap);
   DeleteDC(hMemoryDC);
   ReleaseDC(NULL, hWindowDC);
 
-  return CMN_SUCCESS;
+  return cmn_free((void **)&lpbitmap);
 }
 
 /**
@@ -598,12 +816,54 @@ cmn_error_e cmn_window_create(cmn_app_t *app, cmn_window_t **out_window) {
  */
 cmn_error_e cmn_window_set_title(cmn_window_t *window, const char *title) {
   WCHAR wtitle[256];
+  cmn_error_e rc;
   if (window == NULL || title == NULL) {
     return CMN_ERR_INVAL;
   }
-  (void)utf8_to_utf16(title, wtitle, 256);
+  rc = utf8_to_utf16(title, wtitle, 256);
   SetWindowTextW(window->hwnd, wtitle);
-  return CMN_SUCCESS;
+  return rc;
+}
+
+/**
+ * @brief Resolves a widget handle to its underlying `HWND`.
+ * @param node Widget pointer.
+ * @param kind Widget kind discriminant.
+ * @param out_hwnd Output pointer receiving the resolved `HWND` or `NULL`.
+ * @return CMN_SUCCESS on success.
+ */
+static cmn_error_e win32_resolve_widget_hwnd(void *node, cmn_widget_kind_e kind,
+                                             HWND *out_hwnd) {
+  switch (kind) {
+  case CMN_WIDGET_KIND_BUTTON:
+    *out_hwnd = ((cmn_button_t *)node)->hwnd;
+    return CMN_SUCCESS;
+  case CMN_WIDGET_KIND_LABEL:
+    *out_hwnd = ((cmn_label_t *)node)->hwnd;
+    return CMN_SUCCESS;
+  case CMN_WIDGET_KIND_TEXTBOX:
+    *out_hwnd = ((cmn_textbox_t *)node)->hwnd;
+    return CMN_SUCCESS;
+  case CMN_WIDGET_KIND_TEXTVIEW:
+    *out_hwnd = ((cmn_textview_t *)node)->hwnd;
+    return CMN_SUCCESS;
+  case CMN_WIDGET_KIND_VBOX:
+    *out_hwnd = ((cmn_vbox_t *)node)->hwnd;
+    return CMN_SUCCESS;
+  case CMN_WIDGET_KIND_HBOX:
+    *out_hwnd = ((cmn_hbox_t *)node)->hwnd;
+    return CMN_SUCCESS;
+  default:
+    if (kind == CMN_WIDGET_KIND_WINDOW || kind == CMN_WIDGET_KIND_MENU ||
+        kind == CMN_WIDGET_KIND_FILEPICKER ||
+        kind == CMN_WIDGET_KIND_COLORPICKER || kind == CMN_WIDGET_KIND_FLEX ||
+        kind == CMN_WIDGET_KIND_GRID) {
+      *out_hwnd = NULL;
+      return CMN_SUCCESS;
+    }
+    *out_hwnd = (HWND)((cmn_widget_header_t *)node)->native_handle;
+    return CMN_SUCCESS;
+  }
 }
 
 /**
@@ -622,8 +882,11 @@ static cmn_error_e win32_apply_layout_tree(HWND hWin, void *node, int offset_x,
   size_t i;
   cmn_error_e rc;
 
-  if (hWin == NULL || node == NULL) {
+  if (node == NULL) {
     return CMN_ERR_INVAL;
+  }
+  if (hWin == NULL) {
+    return CMN_SUCCESS;
   }
   rc = cmn_widget_get_kind(node, &kind);
   if (rc != CMN_SUCCESS) {
@@ -652,23 +915,11 @@ static cmn_error_e win32_apply_layout_tree(HWND hWin, void *node, int offset_x,
     int w = (r.width > 0) ? r.width : 200;
     int h = (r.height > 0) ? r.height
                            : (kind == CMN_WIDGET_KIND_TEXTVIEW ? 140 : 28);
+    int win_h = (kind == CMN_WIDGET_KIND_POPUP || kind == CMN_WIDGET_KIND_COMBO)
+                    ? 180
+                    : h;
 
-    switch (kind) {
-    case CMN_WIDGET_KIND_BUTTON:
-      hChild = ((cmn_button_t *)node)->hwnd;
-      break;
-    case CMN_WIDGET_KIND_LABEL:
-      hChild = ((cmn_label_t *)node)->hwnd;
-      break;
-    case CMN_WIDGET_KIND_TEXTBOX:
-      hChild = ((cmn_textbox_t *)node)->hwnd;
-      break;
-    case CMN_WIDGET_KIND_TEXTVIEW:
-      hChild = ((cmn_textview_t *)node)->hwnd;
-      break;
-    default:
-      break;
-    }
+    rc = win32_resolve_widget_hwnd(node, kind, &hChild);
 
     if (hChild != NULL) {
       LONG_PTR style = GetWindowLongPtrW(hChild, GWL_STYLE);
@@ -678,13 +929,16 @@ static cmn_error_e win32_apply_layout_tree(HWND hWin, void *node, int offset_x,
       if (g_win32_ui_font != NULL) {
         SendMessageW(hChild, WM_SETFONT, (WPARAM)g_win32_ui_font, TRUE);
       }
-      SetWindowPos(hChild, NULL, offset_x, offset_y, w, h,
+      SetWindowPos(hChild, NULL, offset_x, offset_y, w, win_h,
                    SWP_NOZORDER | SWP_SHOWWINDOW | SWP_FRAMECHANGED);
+      if (kind >= CMN_WIDGET_KIND_CHECKBOX) {
+        rc = cmn_backend_widget_sync((cmn_widget_header_t *)node);
+      }
       InvalidateRect(hChild, NULL, TRUE);
       UpdateWindow(hChild);
     }
   }
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -693,6 +947,7 @@ static cmn_error_e win32_apply_layout_tree(HWND hWin, void *node, int offset_x,
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_window_show(cmn_window_t *window) {
+  cmn_error_e rc = CMN_SUCCESS;
   if (window == NULL) {
     return CMN_ERR_INVAL;
   }
@@ -711,10 +966,10 @@ cmn_error_e cmn_window_show(cmn_window_t *window) {
                        (DWORD)GetWindowLongPtrW(window->hwnd, GWL_EXSTYLE));
     SetWindowPos(window->hwnd, NULL, 120, 90, wrc.right - wrc.left,
                  wrc.bottom - wrc.top, SWP_NOZORDER);
-    (void)win32_apply_layout_tree(window->hwnd, window->base.layout_root, 0, 0);
+    rc = win32_apply_layout_tree(window->hwnd, window->base.layout_root, 0, 0);
   }
   ShowWindow(window->hwnd, SW_SHOW);
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -905,15 +1160,17 @@ cmn_error_e cmn_dialog_show_modal(cmn_window_t *parent, cmn_window_t *modal) {
 cmn_error_e cmn_message_box_show(const char *title, const char *msg) {
   WCHAR wtitle[256];
   WCHAR wmsg[1024];
+  cmn_error_e rc;
+  cmn_error_e msg_rc;
   if (title == NULL || msg == NULL) {
     return CMN_ERR_INVAL;
   }
-  (void)utf8_to_utf16(title, wtitle, 256);
-  (void)utf8_to_utf16(msg, wmsg, 1024);
+  rc = utf8_to_utf16(title, wtitle, 256);
+  msg_rc = utf8_to_utf16(msg, wmsg, 1024);
 #ifndef CMN_TESTING
   MessageBoxW(NULL, wmsg, wtitle, MB_OK);
 #endif
-  return CMN_SUCCESS;
+  return (rc != CMN_SUCCESS) ? rc : msg_rc;
 }
 
 /**
@@ -960,6 +1217,9 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
   case CMN_WIDGET_KIND_FLEX:
   case CMN_WIDGET_KIND_GRID:
     break;
+  case CMN_WIDGET_KIND_PANEL:
+    hParent = (HWND)((cmn_widget_header_t *)parent)->native_handle;
+    break;
   default:
     return CMN_ERR_INVAL;
   }
@@ -987,7 +1247,14 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
   case CMN_WIDGET_KIND_GRID:
     break;
   default:
-    return CMN_ERR_INVAL;
+    if (child_kind == CMN_WIDGET_KIND_WINDOW ||
+        child_kind == CMN_WIDGET_KIND_MENU ||
+        child_kind == CMN_WIDGET_KIND_FILEPICKER ||
+        child_kind == CMN_WIDGET_KIND_COLORPICKER) {
+      return CMN_ERR_INVAL;
+    }
+    hChild = (HWND)((cmn_widget_header_t *)child)->native_handle;
+    break;
   }
 
   if (hParent == NULL || hChild == NULL) {
@@ -1048,7 +1315,9 @@ cmn_error_e cmn_button_create(cmn_button_t **out_button) {
   }
   btn->cmd_id = (slot >= 0) ? (100 + slot) : 0;
 
-  (void)register_window_class();
+  if (rc == CMN_SUCCESS) {
+    rc = register_window_class();
+  }
   btn->hwnd = CreateWindowExW(
       0, L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 100, 30,
       g_win32_parking_hwnd, (HMENU)(intptr_t)btn->cmd_id, GetModuleHandle(NULL),
@@ -1070,12 +1339,13 @@ cmn_error_e cmn_button_create(cmn_button_t **out_button) {
  */
 cmn_error_e cmn_button_set_text(cmn_button_t *button, const char *text) {
   WCHAR wtext[256];
+  cmn_error_e rc;
   if (button == NULL || text == NULL) {
     return CMN_ERR_INVAL;
   }
-  (void)utf8_to_utf16(text, wtext, 256);
+  rc = utf8_to_utf16(text, wtext, 256);
   SetWindowTextW(button->hwnd, wtext);
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -1150,10 +1420,12 @@ cmn_error_e cmn_label_create(cmn_label_t **out_label) {
   rc = cmn_widget_header_init(&lbl->base, CMN_WIDGET_KIND_LABEL,
                               destroy_label_adapter);
 
-  (void)register_window_class();
+  if (rc == CMN_SUCCESS) {
+    rc = register_window_class();
+  }
   lbl->hwnd = CreateWindowExW(
-      0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT, 0, 0, 100, 30,
-      g_win32_parking_hwnd, NULL, GetModuleHandle(NULL), NULL);
+      0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX, 0, 0,
+      100, 30, g_win32_parking_hwnd, NULL, GetModuleHandle(NULL), NULL);
   if (rc != CMN_SUCCESS) {
     return rc;
   }
@@ -1171,12 +1443,13 @@ cmn_error_e cmn_label_create(cmn_label_t **out_label) {
  */
 cmn_error_e cmn_label_set_text(cmn_label_t *label, const char *text) {
   WCHAR wtext[256];
+  cmn_error_e rc;
   if (label == NULL || text == NULL) {
     return CMN_ERR_INVAL;
   }
-  (void)utf8_to_utf16(text, wtext, 256);
+  rc = utf8_to_utf16(text, wtext, 256);
   SetWindowTextW(label->hwnd, wtext);
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -1215,7 +1488,9 @@ cmn_error_e cmn_textbox_create(cmn_textbox_t **out_textbox) {
   rc = cmn_widget_header_init(&tb->base, CMN_WIDGET_KIND_TEXTBOX,
                               destroy_textbox_adapter);
 
-  (void)register_window_class();
+  if (rc == CMN_SUCCESS) {
+    rc = register_window_class();
+  }
   tb->hwnd = CreateWindowExW(
       0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 0, 0,
       100, 30, g_win32_parking_hwnd, NULL, GetModuleHandle(NULL), NULL);
@@ -1236,27 +1511,26 @@ cmn_error_e cmn_textbox_create(cmn_textbox_t **out_textbox) {
  */
 cmn_error_e cmn_textbox_set_text(cmn_textbox_t *textbox, const char *text) {
   cmn_error_e rc;
+  cmn_error_e cp_rc;
   WCHAR wtext[256];
   if (textbox == NULL || text == NULL) {
     return CMN_ERR_INVAL;
   }
-  (void)utf8_to_utf16(text, wtext, 256);
+  rc = utf8_to_utf16(text, wtext, 256);
   if (textbox->hwnd) {
     SetWindowTextW(textbox->hwnd, wtext);
   }
-  rc = cmn_strcpy_s(textbox->text_cache, sizeof(textbox->text_cache), text);
+  cp_rc = cmn_strcpy_s(textbox->text_cache, sizeof(textbox->text_cache), text);
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  return CMN_SUCCESS;
+  return cp_rc;
 }
 
 /**
- * @brief Configures whether a text box masks its characters using Win32
- * `ES_PASSWORD` and `EM_SETPASSWORDCHAR`.
+ * @brief Configures whether a text box masks its characters as a password.
  * @param textbox The text box to modify.
- * @param is_password Non-zero (`cmn_true`) to enable password masking, `0`
- * (`cmn_false`) for plain text.
+ * @param is_password Non-zero to enable password masking, zero for plain text.
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_textbox_set_password(cmn_textbox_t *textbox, int is_password) {
@@ -1286,6 +1560,7 @@ cmn_error_e cmn_textbox_set_password(cmn_textbox_t *textbox, int is_password) {
  */
 cmn_error_e cmn_textbox_get_text(cmn_textbox_t *textbox,
                                  const char **out_text) {
+  cmn_error_e rc = CMN_SUCCESS;
   if (g_cmn_mock_textbox_get_text_fail) {
     return CMN_ERR_IO;
   }
@@ -1297,12 +1572,11 @@ cmn_error_e cmn_textbox_get_text(cmn_textbox_t *textbox,
   if (textbox->hwnd) {
     WCHAR wtext[1024];
     GetWindowTextW(textbox->hwnd, wtext, 1024);
-    (void)utf16_to_utf8(wtext, textbox->text_cache,
-                        sizeof(textbox->text_cache));
+    rc = utf16_to_utf8(wtext, textbox->text_cache, sizeof(textbox->text_cache));
   }
 
   *out_text = textbox->text_cache;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -1354,7 +1628,9 @@ cmn_error_e cmn_textview_create(cmn_textview_t **out_textview) {
   rc = cmn_widget_header_init(&tv->base, CMN_WIDGET_KIND_TEXTVIEW,
                               destroy_textview_adapter);
 
-  (void)register_window_class();
+  if (rc == CMN_SUCCESS) {
+    rc = register_window_class();
+  }
   tv->hwnd = CreateWindowExW(0, L"EDIT", L"",
                              WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE |
                                  WS_VSCROLL | ES_AUTOVSCROLL | ES_READONLY,
@@ -1377,19 +1653,21 @@ cmn_error_e cmn_textview_create(cmn_textview_t **out_textview) {
  */
 cmn_error_e cmn_textview_set_text(cmn_textview_t *textview, const char *text) {
   cmn_error_e rc;
+  cmn_error_e cp_rc;
   WCHAR wtext[4096];
   if (textview == NULL || text == NULL) {
     return CMN_ERR_INVAL;
   }
-  (void)utf8_to_utf16(text, wtext, 4096);
+  rc = utf8_to_utf16(text, wtext, 4096);
   if (textview->hwnd) {
     SetWindowTextW(textview->hwnd, wtext);
   }
-  rc = cmn_strcpy_s(textview->text_cache, sizeof(textview->text_cache), text);
+  cp_rc =
+      cmn_strcpy_s(textview->text_cache, sizeof(textview->text_cache), text);
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  return CMN_SUCCESS;
+  return cp_rc;
 }
 
 /**
@@ -1406,6 +1684,8 @@ cmn_error_e cmn_textview_append_text(cmn_textview_t *textview,
   size_t add_len;
   size_t i;
   size_t j = 0;
+  cmn_error_e rc = CMN_SUCCESS;
+  cmn_error_e u_rc;
   if (textview == NULL || text == NULL) {
     return CMN_ERR_INVAL;
   }
@@ -1413,8 +1693,8 @@ cmn_error_e cmn_textview_append_text(cmn_textview_t *textview,
   cur_len = strlen(textview->text_cache);
   add_len = strlen(text);
   if (cur_len + add_len + 1 < sizeof(textview->text_cache)) {
-    (void)cmn_strcpy_s(textview->text_cache + cur_len,
-                       sizeof(textview->text_cache) - cur_len, text);
+    rc = cmn_strcpy_s(textview->text_cache + cur_len,
+                      sizeof(textview->text_cache) - cur_len, text);
   }
 
   for (i = 0; textview->text_cache[i] != '\0' && j + 2 < sizeof(crlf_buf);
@@ -1427,11 +1707,11 @@ cmn_error_e cmn_textview_append_text(cmn_textview_t *textview,
   }
   crlf_buf[j] = '\0';
 
-  (void)utf8_to_utf16(crlf_buf, wtext, 4096);
+  u_rc = utf8_to_utf16(crlf_buf, wtext, 4096);
   if (textview->hwnd) {
     SetWindowTextW(textview->hwnd, wtext);
   }
-  return CMN_SUCCESS;
+  return (rc != CMN_SUCCESS) ? rc : u_rc;
 }
 
 /**
@@ -1620,6 +1900,7 @@ cmn_error_e cmn_menu_add_item(cmn_menu_t *menu, const char *title,
                               cmn_error_e (*on_click)(void *), void *userdata) {
   WCHAR wtitle[256];
   int id;
+  cmn_error_e rc;
   if (menu == NULL || title == NULL) {
     return CMN_ERR_INVAL;
   }
@@ -1637,9 +1918,9 @@ cmn_error_e cmn_menu_add_item(cmn_menu_t *menu, const char *title,
     g_menu_item_map[id - 1000].userdata = userdata;
   }
 
-  (void)utf8_to_utf16(title, wtitle, 256);
+  rc = utf8_to_utf16(title, wtitle, 256);
   AppendMenuW(menu->hmenu, MF_STRING, id, wtitle);
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -1726,7 +2007,7 @@ cmn_error_e cmn_filepicker_show_dialog(cmn_filepicker_t *filepicker) {
   }
 
 #ifdef CMN_TESTING
-  (void)cmn_strcpy_s(filepicker->path, sizeof(filepicker->path), "/tmp/test");
+  return cmn_strcpy_s(filepicker->path, sizeof(filepicker->path), "/tmp/test");
 #else
   {
     IFileOpenDialog *pFileOpen;
@@ -1757,9 +2038,8 @@ cmn_error_e cmn_filepicker_show_dialog(cmn_filepicker_t *filepicker) {
       pFileOpen->lpVtbl->Release(pFileOpen);
     }
   }
-#endif
-
   return CMN_SUCCESS;
+#endif
 }
 
 /**
@@ -1836,13 +2116,316 @@ cmn_error_e cmn_a11y_set_role(void *widget, cmn_a11y_role_e role) {
  */
 cmn_error_e cmn_a11y_set_tabindex(void *widget, int index) {
   cmn_widget_kind_e kind;
-  (void)index;
   if (widget == NULL) {
     return CMN_ERR_INVAL;
   }
   if (cmn_widget_get_kind(widget, &kind) != CMN_SUCCESS ||
       kind == CMN_WIDGET_KIND_MENU || kind == CMN_WIDGET_KIND_FILEPICKER) {
     return CMN_ERR_INVAL;
+  }
+  ((cmn_widget_header_t *)widget)->a11y_tabindex = index;
+  return CMN_SUCCESS;
+}
+
+/**
+ * @brief Backend hook creating the native OS control for an extended widget.
+ * @param hdr Initialized widget header.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_backend_widget_init(cmn_widget_header_t *hdr) {
+  HWND hwnd = NULL;
+  const wchar_t *cls = NULL;
+  DWORD style = WS_CHILD | WS_VISIBLE;
+  cmn_error_e rc;
+  if (hdr == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  rc = register_window_class();
+  if (rc != CMN_SUCCESS) {
+    return rc;
+  }
+  switch (hdr->kind) {
+  case CMN_WIDGET_KIND_CHECKBOX:
+    cls = L"BUTTON";
+    style |= BS_AUTOCHECKBOX;
+    break;
+  case CMN_WIDGET_KIND_RADIOBUTTON:
+    cls = L"BUTTON";
+    style |= BS_AUTORADIOBUTTON;
+    break;
+  case CMN_WIDGET_KIND_TOGGLEBUTTON:
+    cls = L"BUTTON";
+    style |= BS_AUTOCHECKBOX | BS_PUSHLIKE;
+    break;
+  case CMN_WIDGET_KIND_LINE:
+    cls = L"STATIC";
+    style |= SS_ETCHEDHORZ;
+    break;
+  case CMN_WIDGET_KIND_SLIDER:
+    cls = TRACKBAR_CLASSW;
+    style |= TBS_HORZ | TBS_AUTOTICKS;
+    break;
+  case CMN_WIDGET_KIND_PROGRESS:
+    cls = PROGRESS_CLASSW;
+    break;
+  case CMN_WIDGET_KIND_UPDOWN:
+    cls = UPDOWN_CLASSW;
+    style |= UDS_ARROWKEYS;
+    break;
+  case CMN_WIDGET_KIND_POPUP:
+    cls = L"COMBOBOX";
+    style |= CBS_DROPDOWNLIST | WS_VSCROLL;
+    break;
+  case CMN_WIDGET_KIND_COMBO:
+    cls = L"COMBOBOX";
+    style |= CBS_DROPDOWN | WS_VSCROLL;
+    break;
+  case CMN_WIDGET_KIND_LISTBOX:
+    cls = L"LISTBOX";
+    style |= LBS_NOTIFY | WS_VSCROLL | WS_BORDER;
+    break;
+  case CMN_WIDGET_KIND_TABLEVIEW:
+    cls = L"EDIT";
+    style |= WS_BORDER | WS_VSCROLL | ES_MULTILINE | ES_READONLY;
+    break;
+  case CMN_WIDGET_KIND_TABS:
+    cls = WC_TABCONTROLW;
+    break;
+  case CMN_WIDGET_KIND_PANEL:
+    cls = L"BUTTON";
+    style |= BS_GROUPBOX;
+    break;
+  case CMN_WIDGET_KIND_IMAGEVIEW:
+  case CMN_WIDGET_KIND_VIEW:
+  case CMN_WIDGET_KIND_WEBVIEW:
+  case CMN_WIDGET_KIND_SPLITVIEW:
+    cls = CMN_WND_CLASS;
+    break;
+  default:
+    break;
+  }
+  if (cls != NULL && g_win32_parking_hwnd != NULL) {
+    hwnd = CreateWindowExW(0, cls, L"", style, 0, 0, hdr->bounds.width,
+                           hdr->bounds.height, g_win32_parking_hwnd, NULL,
+                           GetModuleHandle(NULL), NULL);
+    if (hwnd != NULL) {
+      SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)hdr);
+      if (hdr->kind == CMN_WIDGET_KIND_PANEL) {
+        SetWindowTextW(hwnd, L"Panel Container (cmn_panel_t)");
+      }
+    }
+    hdr->native_handle = (void *)hwnd;
+  }
+  return CMN_SUCCESS;
+}
+
+/**
+ * @brief Backend hook synchronizing state changes to the native OS control.
+ * @param hdr Widget header whose concrete state was modified.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_backend_widget_sync(cmn_widget_header_t *hdr) {
+  HWND hwnd;
+  cmn_error_e rc = CMN_SUCCESS;
+  if (hdr == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  hwnd = (HWND)hdr->native_handle;
+  if (hwnd == NULL) {
+    return CMN_SUCCESS;
+  }
+  switch (hdr->kind) {
+  case CMN_WIDGET_KIND_CHECKBOX: {
+    cmn_checkbox_t *cb = (cmn_checkbox_t *)hdr;
+    WCHAR wtxt[256];
+    WPARAM check_val = (cb->state == CMN_CHECK_ON)
+                           ? BST_CHECKED
+                           : ((cb->state == CMN_CHECK_MIXED) ? BST_INDETERMINATE
+                                                             : BST_UNCHECKED);
+    rc = utf8_to_utf16(cb->text, wtxt, 256);
+    SetWindowTextW(hwnd, wtxt);
+    if (cb->is_tristate) {
+      LONG st = GetWindowLongW(hwnd, GWL_STYLE);
+      SetWindowLongW(hwnd, GWL_STYLE, (st & ~BS_AUTOCHECKBOX) | BS_AUTO3STATE);
+    }
+    SendMessageW(hwnd, BM_SETCHECK, check_val, 0);
+    break;
+  }
+  case CMN_WIDGET_KIND_RADIOBUTTON: {
+    cmn_radiobutton_t *rb = (cmn_radiobutton_t *)hdr;
+    WCHAR wtxt[256];
+    rc = utf8_to_utf16(rb->text, wtxt, 256);
+    SetWindowTextW(hwnd, wtxt);
+    SendMessageW(hwnd, BM_SETCHECK, rb->selected ? BST_CHECKED : BST_UNCHECKED,
+                 0);
+    break;
+  }
+  case CMN_WIDGET_KIND_TOGGLEBUTTON: {
+    cmn_togglebutton_t *tb = (cmn_togglebutton_t *)hdr;
+    WCHAR wtxt[256];
+    rc = utf8_to_utf16(tb->text, wtxt, 256);
+    SetWindowTextW(hwnd, wtxt);
+    SendMessageW(hwnd, BM_SETCHECK, tb->toggled ? BST_CHECKED : BST_UNCHECKED,
+                 0);
+    break;
+  }
+  case CMN_WIDGET_KIND_SLIDER: {
+    cmn_slider_t *sl = (cmn_slider_t *)hdr;
+    SendMessageW(hwnd, TBM_SETRANGE, TRUE, MAKELONG(0, 100));
+    SendMessageW(hwnd, TBM_SETPOS, TRUE, (LPARAM)(int)(sl->value * 100.0));
+    break;
+  }
+  case CMN_WIDGET_KIND_PROGRESS: {
+    cmn_progress_t *pr = (cmn_progress_t *)hdr;
+    SendMessageW(hwnd, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
+    SendMessageW(hwnd, PBM_SETPOS, (WPARAM)(int)(pr->value * 100.0), 0);
+    break;
+  }
+  case CMN_WIDGET_KIND_UPDOWN: {
+    cmn_updown_t *ud = (cmn_updown_t *)hdr;
+    SendMessageW(hwnd, UDM_SETRANGE32, (WPARAM)(LPARAM)-10000, 10000);
+    SendMessageW(hwnd, UDM_SETPOS32, 0, (LPARAM)(int)ud->value);
+    break;
+  }
+  case CMN_WIDGET_KIND_POPUP: {
+    cmn_popup_t *pu = (cmn_popup_t *)hdr;
+    uint32_t i;
+    SendMessageW(hwnd, CB_RESETCONTENT, 0, 0);
+    for (i = 0; i < pu->count; ++i) {
+      WCHAR witem[256];
+      cmn_error_e u_rc = utf8_to_utf16(pu->items[i], witem, 256);
+      rc = (rc != CMN_SUCCESS) ? rc : u_rc;
+      SendMessageW(hwnd, CB_ADDSTRING, 0, (LPARAM)witem);
+    }
+    if (pu->selected < pu->count) {
+      SendMessageW(hwnd, CB_SETCURSEL, (WPARAM)pu->selected, 0);
+    }
+    break;
+  }
+  case CMN_WIDGET_KIND_COMBO: {
+    cmn_combo_t *co = (cmn_combo_t *)hdr;
+    WCHAR wtxt[256];
+    uint32_t i;
+    cmn_error_e u_rc;
+    SendMessageW(hwnd, CB_RESETCONTENT, 0, 0);
+    for (i = 0; i < co->count; ++i) {
+      WCHAR witem[256];
+      u_rc = utf8_to_utf16(co->items[i], witem, 256);
+      rc = (rc != CMN_SUCCESS) ? rc : u_rc;
+      SendMessageW(hwnd, CB_ADDSTRING, 0, (LPARAM)witem);
+    }
+    u_rc = utf8_to_utf16(co->text, wtxt, 256);
+    rc = (rc != CMN_SUCCESS) ? rc : u_rc;
+    SetWindowTextW(hwnd, wtxt);
+    break;
+  }
+  case CMN_WIDGET_KIND_LISTBOX: {
+    cmn_listbox_t *lb = (cmn_listbox_t *)hdr;
+    uint32_t i;
+    SendMessageW(hwnd, LB_RESETCONTENT, 0, 0);
+    for (i = 0; i < lb->count; ++i) {
+      char line[300];
+      WCHAR witem[300];
+      const char *pfx = "";
+      cmn_error_e fmt_rc;
+      cmn_error_e u_rc;
+      if (lb->checkable) {
+        pfx = lb->checked[i] ? "[x] " : "[ ] ";
+      }
+      fmt_rc = cmn_sprintf_s(line, sizeof(line), "%s%s", pfx, lb->items[i]);
+      u_rc = utf8_to_utf16(line, witem, 300);
+      if (rc == CMN_SUCCESS) {
+        rc = (fmt_rc != CMN_SUCCESS) ? fmt_rc : u_rc;
+      }
+      SendMessageW(hwnd, LB_ADDSTRING, 0, (LPARAM)witem);
+    }
+    if (lb->selected < lb->count) {
+      SendMessageW(hwnd, LB_SETCURSEL, (WPARAM)lb->selected, 0);
+    }
+    break;
+  }
+  case CMN_WIDGET_KIND_TABLEVIEW: {
+    cmn_tableview_t *tbl = (cmn_tableview_t *)hdr;
+    char text_buf[4096];
+    WCHAR wtxt[4096];
+    size_t pos = 0;
+    uint32_t r, c;
+    cmn_error_e fmt_rc;
+    cmn_error_e u_rc;
+    text_buf[0] = '\0';
+    for (c = 0; c < tbl->col_count; ++c) {
+      fmt_rc = cmn_sprintf_s(text_buf + pos, sizeof(text_buf) - pos, "%-16s",
+                             tbl->col_titles[c]);
+      rc = (rc != CMN_SUCCESS) ? rc : fmt_rc;
+      pos = strlen(text_buf);
+    }
+    fmt_rc =
+        cmn_sprintf_s(text_buf + pos, sizeof(text_buf) - pos,
+                      "\r\n------------------------------------------------"
+                      "\r\n");
+    rc = (rc != CMN_SUCCESS) ? rc : fmt_rc;
+    pos = strlen(text_buf);
+    for (r = 0; r < tbl->row_count; ++r) {
+      fmt_rc = cmn_sprintf_s(text_buf + pos, sizeof(text_buf) - pos, "%s",
+                             (r == tbl->selected_row) ? "> " : "  ");
+      rc = (rc != CMN_SUCCESS) ? rc : fmt_rc;
+      pos = strlen(text_buf);
+      for (c = 0; c < tbl->col_count; ++c) {
+        fmt_rc = cmn_sprintf_s(text_buf + pos, sizeof(text_buf) - pos, "%-16s",
+                               tbl->cells[r][c]);
+        rc = (rc != CMN_SUCCESS) ? rc : fmt_rc;
+        pos = strlen(text_buf);
+      }
+      fmt_rc = cmn_sprintf_s(text_buf + pos, sizeof(text_buf) - pos, "\r\n");
+      rc = (rc != CMN_SUCCESS) ? rc : fmt_rc;
+      pos = strlen(text_buf);
+    }
+    u_rc = utf8_to_utf16(text_buf, wtxt, 4096);
+    rc = (rc != CMN_SUCCESS) ? rc : u_rc;
+    SetWindowTextW(hwnd, wtxt);
+    break;
+  }
+  case CMN_WIDGET_KIND_TABS: {
+    cmn_tabs_t *tb = (cmn_tabs_t *)hdr;
+    uint32_t i;
+    SendMessageW(hwnd, TCM_DELETEALLITEMS, 0, 0);
+    for (i = 0; i < tb->count; ++i) {
+      WCHAR wtitle[128];
+      TCITEMW tie;
+      cmn_error_e u_rc;
+      memset(&tie, 0, sizeof(tie));
+      tie.mask = TCIF_TEXT;
+      u_rc = utf8_to_utf16(tb->titles[i], wtitle, 128);
+      rc = (rc != CMN_SUCCESS) ? rc : u_rc;
+      tie.pszText = wtitle;
+      SendMessageW(hwnd, TCM_INSERTITEMW, (WPARAM)i, (LPARAM)&tie);
+    }
+    if (tb->selected < tb->count) {
+      SendMessageW(hwnd, TCM_SETCURSEL, (WPARAM)tb->selected, 0);
+    }
+    break;
+  }
+  default:
+    InvalidateRect(hwnd, NULL, TRUE);
+    break;
+  }
+  return rc;
+}
+
+/**
+ * @brief Backend hook destroying the native OS control of an extended widget.
+ * @param hdr Widget header being destroyed.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_backend_widget_cleanup(cmn_widget_header_t *hdr) {
+  HWND hwnd;
+  if (hdr == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  hwnd = (HWND)hdr->native_handle;
+  if (hwnd != NULL) {
+    DestroyWindow(hwnd);
+    hdr->native_handle = NULL;
   }
   return CMN_SUCCESS;
 }

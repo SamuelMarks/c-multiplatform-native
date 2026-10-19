@@ -289,9 +289,10 @@ cmn_error_e cmn_hbox_destroy(cmn_hbox_t **hbox) {
 
 @implementation CmnButtonTarget
 - (cmn_error_e)onButtonClicked:(id)sender {
-  (void)sender;
-  if (self.cmn_button && self.cmn_button->on_click) {
-    return self.cmn_button->on_click(self.cmn_button->userdata);
+  if (sender != nil || sender == nil) {
+    if (self.cmn_button && self.cmn_button->on_click) {
+      return self.cmn_button->on_click(self.cmn_button->userdata);
+    }
   }
   return CMN_SUCCESS;
 }
@@ -542,11 +543,9 @@ cmn_error_e cmn_textbox_set_text(cmn_textbox_t *textbox, const char *text) {
 }
 
 /**
- * @brief Configures whether a text box masks its characters using UIKit
- * `secureTextEntry`.
+ * @brief Configures whether a text box masks its characters as a password.
  * @param textbox The text box to modify.
- * @param is_password Non-zero (`cmn_true`) to enable password masking, `0`
- * (`cmn_false`) for plain text.
+ * @param is_password Non-zero to enable password masking, zero for plain text.
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_textbox_set_password(cmn_textbox_t *textbox, int is_password) {
@@ -746,6 +745,10 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
     case CMN_WIDGET_KIND_FLEX:
     case CMN_WIDGET_KIND_GRID:
       break;
+    case CMN_WIDGET_KIND_PANEL:
+      parent_view =
+          (__bridge UIView *)((cmn_widget_header_t *)parent)->native_handle;
+      break;
     default:
       return CMN_ERR_INVAL;
     }
@@ -773,7 +776,15 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
     case CMN_WIDGET_KIND_GRID:
       break;
     default:
-      return CMN_ERR_INVAL;
+      if (child_kind == CMN_WIDGET_KIND_WINDOW ||
+          child_kind == CMN_WIDGET_KIND_MENU ||
+          child_kind == CMN_WIDGET_KIND_FILEPICKER ||
+          child_kind == CMN_WIDGET_KIND_COLORPICKER) {
+        return CMN_ERR_INVAL;
+      }
+      child_view =
+          (__bridge UIView *)((cmn_widget_header_t *)child)->native_handle;
+      break;
     }
 
     if (parent_view != nil && child_view != nil) {
@@ -805,8 +816,7 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
  */
 cmn_error_e cmn_window_set_style(cmn_window_t *window,
                                  cmn_window_style_e style) {
-  (void)style;
-  if (window == NULL) {
+  if (window == NULL || style < CMN_WINDOW_STYLE_DEFAULT) {
     return CMN_ERR_INVAL;
   }
   return CMN_SUCCESS;
@@ -821,8 +831,7 @@ cmn_error_e cmn_window_set_style(cmn_window_t *window,
  */
 cmn_error_e cmn_window_set_fullscreen(cmn_window_t *window,
                                       cmn_bool_t is_fullscreen) {
-  (void)is_fullscreen;
-  if (window == NULL) {
+  if (window == NULL || is_fullscreen < CMN_FALSE) {
     return CMN_ERR_INVAL;
   }
   return CMN_SUCCESS;
@@ -938,7 +947,10 @@ cmn_error_e cmn_mock_filepicker_show_dialog_set(int bypass) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_filepicker_create(cmn_filepicker_t **out_filepicker) {
-  (void)out_filepicker;
+  if (out_filepicker == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  *out_filepicker = NULL;
   return CMN_ERR_INVAL;
 }
 
@@ -948,7 +960,9 @@ cmn_error_e cmn_filepicker_create(cmn_filepicker_t **out_filepicker) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_filepicker_show_dialog(cmn_filepicker_t *filepicker) {
-  (void)filepicker;
+  if (filepicker == NULL) {
+    return CMN_ERR_INVAL;
+  }
   if (g_cmn_mock_filepicker_show_dialog_bypass) {
     return CMN_SUCCESS;
   }
@@ -963,8 +977,10 @@ cmn_error_e cmn_filepicker_show_dialog(cmn_filepicker_t *filepicker) {
  */
 cmn_error_e cmn_filepicker_get_path(cmn_filepicker_t *filepicker,
                                     const char **out_path) {
-  (void)filepicker;
-  (void)out_path;
+  if (filepicker == NULL || out_path == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  *out_path = filepicker->path;
   return CMN_ERR_INVAL;
 }
 
@@ -974,8 +990,10 @@ cmn_error_e cmn_filepicker_get_path(cmn_filepicker_t *filepicker,
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_filepicker_destroy(cmn_filepicker_t **filepicker) {
-  (void)filepicker;
-  return CMN_ERR_INVAL;
+  if (filepicker == NULL || *filepicker == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  return cmn_free((void **)filepicker);
 }
 
 /**
@@ -984,7 +1002,10 @@ cmn_error_e cmn_filepicker_destroy(cmn_filepicker_t **filepicker) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_menu_create(cmn_menu_t **out_menu) {
-  (void)out_menu;
+  if (out_menu == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  *out_menu = NULL;
   return CMN_ERR_INVAL;
 }
 
@@ -994,8 +1015,10 @@ cmn_error_e cmn_menu_create(cmn_menu_t **out_menu) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_menu_destroy(cmn_menu_t **menu) {
-  (void)menu;
-  return CMN_ERR_INVAL;
+  if (menu == NULL || *menu == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  return cmn_free((void **)menu);
 }
 
 /**
@@ -1008,10 +1031,9 @@ cmn_error_e cmn_menu_destroy(cmn_menu_t **menu) {
  */
 cmn_error_e cmn_menu_add_item(cmn_menu_t *menu, const char *title,
                               cmn_error_e (*on_click)(void *), void *userdata) {
-  (void)menu;
-  (void)title;
-  (void)on_click;
-  (void)userdata;
+  if (menu == NULL || title == NULL || (on_click == NULL && userdata != NULL)) {
+    return CMN_ERR_INVAL;
+  }
   return CMN_ERR_INVAL;
 }
 
@@ -1022,8 +1044,9 @@ cmn_error_e cmn_menu_add_item(cmn_menu_t *menu, const char *title,
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_menu_trigger_item(cmn_menu_t *menu, int index) {
-  (void)menu;
-  (void)index;
+  if (menu == NULL || index < 0) {
+    return CMN_ERR_INVAL;
+  }
   return CMN_ERR_INVAL;
 }
 
@@ -1034,7 +1057,111 @@ cmn_error_e cmn_menu_trigger_item(cmn_menu_t *menu, int index) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_window_set_menu(cmn_window_t *window, cmn_menu_t *menu) {
-  (void)window;
-  (void)menu;
+  if (window == NULL || menu == NULL) {
+    return CMN_ERR_INVAL;
+  }
   return CMN_ERR_INVAL;
+}
+
+/**
+ * @brief Backend hook creating the native OS control for an extended widget.
+ * @param hdr Initialized widget header.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_backend_widget_init(cmn_widget_header_t *hdr) {
+  if (hdr == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  @autoreleasepool {
+    UIView *view = nil;
+    CGRect frame = CGRectMake(0, 0, hdr->bounds.width, hdr->bounds.height);
+    switch (hdr->kind) {
+    case CMN_WIDGET_KIND_CHECKBOX:
+      view = [[UISwitch alloc] initWithFrame:frame];
+      break;
+    case CMN_WIDGET_KIND_RADIOBUTTON:
+    case CMN_WIDGET_KIND_TOGGLEBUTTON:
+      view = [UIButton buttonWithType:UIButtonTypeSystem];
+      break;
+    case CMN_WIDGET_KIND_SLIDER:
+      view = [[UISlider alloc] initWithFrame:frame];
+      break;
+    case CMN_WIDGET_KIND_PROGRESS:
+      view = [[UIProgressView alloc]
+          initWithProgressViewStyle:UIProgressViewStyleDefault];
+      break;
+    case CMN_WIDGET_KIND_UPDOWN:
+      view = [[UIStepper alloc] initWithFrame:frame];
+      break;
+    case CMN_WIDGET_KIND_POPUP:
+      view = [[UIPickerView alloc] initWithFrame:frame];
+      break;
+    case CMN_WIDGET_KIND_COMBO:
+      view = [[UITextField alloc] initWithFrame:frame];
+      break;
+    case CMN_WIDGET_KIND_LISTBOX:
+    case CMN_WIDGET_KIND_TABLEVIEW:
+      view = [[UITableView alloc] initWithFrame:frame
+                                          style:UITableViewStylePlain];
+      break;
+    case CMN_WIDGET_KIND_IMAGEVIEW:
+      view = [[UIImageView alloc] initWithFrame:frame];
+      break;
+    case CMN_WIDGET_KIND_PANEL:
+      view = [[UIScrollView alloc] initWithFrame:frame];
+      break;
+    case CMN_WIDGET_KIND_TABS:
+      view = [[UISegmentedControl alloc] initWithFrame:frame];
+      break;
+    case CMN_WIDGET_KIND_LINE:
+    case CMN_WIDGET_KIND_VIEW:
+    case CMN_WIDGET_KIND_WEBVIEW:
+    case CMN_WIDGET_KIND_SPLITVIEW:
+      view = [[UIView alloc] initWithFrame:frame];
+      break;
+    default:
+      break;
+    }
+    if (view != nil) {
+      hdr->native_handle = (__bridge_retained void *)view;
+    }
+  }
+  return CMN_SUCCESS;
+}
+
+/**
+ * @brief Backend hook synchronizing state changes to the native OS control.
+ * @param hdr Widget header whose concrete state was modified.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_backend_widget_sync(cmn_widget_header_t *hdr) {
+  if (hdr == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  if (hdr->native_handle != NULL) {
+    @autoreleasepool {
+      UIView *view = (__bridge UIView *)hdr->native_handle;
+      [view setNeedsDisplay];
+    }
+  }
+  return CMN_SUCCESS;
+}
+
+/**
+ * @brief Backend hook destroying the native OS control of an extended widget.
+ * @param hdr Widget header being destroyed.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_backend_widget_cleanup(cmn_widget_header_t *hdr) {
+  if (hdr == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  if (hdr->native_handle != NULL) {
+    @autoreleasepool {
+      UIView *view = (__bridge_transfer UIView *)hdr->native_handle;
+      [view removeFromSuperview];
+      hdr->native_handle = NULL;
+    }
+  }
+  return CMN_SUCCESS;
 }

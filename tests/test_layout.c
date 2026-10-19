@@ -837,7 +837,9 @@ struct resize_spy_s {
 static cmn_error_e on_window_resized_spy(cmn_window_t *window, int width,
                                          int height, void *userdata) {
   struct resize_spy_s *spy = (struct resize_spy_s *)userdata;
-  (void)window;
+  if (window == NULL) {
+    return CMN_ERR_INVAL;
+  }
   spy->call_count++;
   spy->last_w = width;
   spy->last_h = height;

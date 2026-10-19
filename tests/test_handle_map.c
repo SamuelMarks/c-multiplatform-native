@@ -33,9 +33,9 @@ TEST test_handle_map_init_and_cleanup(void) {
 }
 
 TEST test_handle_map_init_oom(void) {
-  (void)cmn_handle_map_mock_mutex_init_set(1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_handle_map_mock_mutex_init_set(1));
   ASSERT_EQ(CMN_ERR_NOMEM, cmn_handle_map_init());
-  (void)cmn_handle_map_mock_mutex_init_set(0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_handle_map_mock_mutex_init_set(0));
   PASS();
 }
 
@@ -146,9 +146,9 @@ TEST test_handle_map_capacity(void) {
   /* Manually empty it for tests */
   for (i = 0; i < 1024; i++) {
     if (i == 500) {
-      (void)cmn_handle_map_remove((void *)0x2000);
+      ASSERT_EQ(CMN_SUCCESS, cmn_handle_map_remove((void *)0x2000));
     } else {
-      (void)cmn_handle_map_remove(base + i);
+      ASSERT_EQ(CMN_SUCCESS, cmn_handle_map_remove(base + i));
     }
   }
 
@@ -163,13 +163,13 @@ TEST test_handle_map_mutex_failures(void) {
 
   ASSERT_EQ(CMN_SUCCESS, cmn_handle_map_init());
 
-  (void)cmn_handle_map_mock_mutex_lock_set(1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_handle_map_mock_mutex_lock_set(1));
   ASSERT_EQ(CMN_ERR_IO, cmn_handle_map_add(native1, cmn1));
   ASSERT_EQ(CMN_ERR_IO, cmn_handle_map_get(native1, &out));
   ASSERT_EQ(CMN_ERR_IO, cmn_handle_map_remove(native1));
-  (void)cmn_handle_map_mock_mutex_lock_set(0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_handle_map_mock_mutex_lock_set(0));
 
-  (void)cmn_handle_map_mock_mutex_unlock_set(1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_handle_map_mock_mutex_unlock_set(1));
   /* test the unlock fail in the loop (found case) */
   ASSERT_EQ(CMN_ERR_IO, cmn_handle_map_add(native1, cmn1));
   ASSERT_EQ(CMN_ERR_IO, cmn_handle_map_get(native1, &out));
@@ -193,12 +193,12 @@ TEST test_handle_map_mutex_failures(void) {
   ASSERT_EQ(CMN_ERR_IO, cmn_handle_map_remove(native1));
   ASSERT_EQ(CMN_ERR_IO, cmn_handle_map_remove((void *)0x40));
 
-  (void)cmn_handle_map_mock_mutex_unlock_set(0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_handle_map_mock_mutex_unlock_set(0));
 
   /* Make sure cleanup mock works too */
-  (void)cmn_handle_map_mock_mutex_free_set(1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_handle_map_mock_mutex_free_set(1));
   ASSERT_EQ(CMN_ERR_IO, cmn_handle_map_cleanup());
-  (void)cmn_handle_map_mock_mutex_free_set(0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_handle_map_mock_mutex_free_set(0));
 
   ASSERT_EQ(CMN_SUCCESS, cmn_handle_map_cleanup());
   PASS();
@@ -213,10 +213,10 @@ TEST test_handle_map_unlock_fail_after_loop(void) {
     ASSERT_EQ(CMN_SUCCESS, cmn_handle_map_add(base + i, base + i));
   }
 
-  (void)cmn_handle_map_mock_mutex_unlock_set(1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_handle_map_mock_mutex_unlock_set(1));
   /* Full, fails to add, tries to unlock -> returns IO instead of NOMEM */
   ASSERT_EQ(CMN_ERR_IO, cmn_handle_map_add((void *)0x6000, (void *)0x6000));
-  (void)cmn_handle_map_mock_mutex_unlock_set(0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_handle_map_mock_mutex_unlock_set(0));
 
   for (i = 0; i < 1024; i++) {
     ASSERT_EQ(CMN_SUCCESS, cmn_handle_map_remove(base + i));

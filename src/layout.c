@@ -65,12 +65,18 @@ static cmn_error_e clamp_dimension(int val, int min_val, int max_val,
 static cmn_error_e apply_child_layout(void *child, cmn_rect_t rect) {
   cmn_widget_kind_e kind = CMN_WIDGET_KIND_NONE;
   cmn_error_e rc;
+  cmn_error_e kind_rc;
   rc = cmn_widget_set_bounds(child, rect);
-  rc = cmn_widget_get_kind(child, &kind);
+  kind_rc = cmn_widget_get_kind(child, &kind);
+  rc = (rc != CMN_SUCCESS) ? rc : kind_rc;
   if (kind == CMN_WIDGET_KIND_FLEX) {
-    rc = cmn_flex_compute_layout((cmn_flex_t *)child, rect.width, rect.height);
+    cmn_error_e flex_rc =
+        cmn_flex_compute_layout((cmn_flex_t *)child, rect.width, rect.height);
+    rc = (rc != CMN_SUCCESS) ? rc : flex_rc;
   } else if (kind == CMN_WIDGET_KIND_GRID) {
-    rc = cmn_grid_compute_layout((cmn_grid_t *)child, rect.width, rect.height);
+    cmn_error_e grid_rc =
+        cmn_grid_compute_layout((cmn_grid_t *)child, rect.width, rect.height);
+    rc = (rc != CMN_SUCCESS) ? rc : grid_rc;
   }
   return rc;
 }
@@ -434,14 +440,13 @@ cmn_error_e cmn_flex_add_child(cmn_flex_t *flex, void *child,
       kind != CMN_WIDGET_KIND_FLEX) {
     return CMN_ERR_INVAL;
   }
-  if (style != NULL) {
+  rc = cmn_flex_item_style_init(&resolved_style);
+  if (style != NULL && rc == CMN_SUCCESS) {
     rc = validate_flex_item_style(style);
-    if (rc != CMN_SUCCESS) {
-      return rc;
-    }
     resolved_style = *style;
-  } else {
-    rc = cmn_flex_item_style_init(&resolved_style);
+  }
+  if (rc != CMN_SUCCESS) {
+    return rc;
   }
 
   if (flex->child_count >= CMN_LAYOUT_MAX_CHILDREN) {
@@ -659,12 +664,15 @@ cmn_error_e cmn_flex_compute_layout(cmn_flex_t *flex, int available_width,
     int intrinsic_cross = is_row ? intr->height : intr->width;
     int base_m = (st->flex_basis > 0) ? st->flex_basis : intrinsic_main;
 
-    rc =
-        clamp_dimension(base_m, is_row ? st->min_width : st->min_height,
-                        is_row ? st->max_width : st->max_height, &item_main[i]);
-    rc = clamp_dimension(
-        intrinsic_cross, is_row ? st->min_height : st->min_width,
-        is_row ? st->max_height : st->max_width, &item_cross[i]);
+    {
+      cmn_error_e c1_rc = clamp_dimension(
+          base_m, is_row ? st->min_width : st->min_height,
+          is_row ? st->max_width : st->max_height, &item_main[i]);
+      cmn_error_e c2_rc = clamp_dimension(
+          intrinsic_cross, is_row ? st->min_height : st->min_width,
+          is_row ? st->max_height : st->max_width, &item_cross[i]);
+      rc = (c1_rc != CMN_SUCCESS) ? c1_rc : c2_rc;
+    }
   }
 
   /* 3. Partition items into flex lines */
@@ -895,7 +903,11 @@ cmn_error_e cmn_flex_compute_layout(cmn_flex_t *flex, int available_width,
       }
 
       flex->children[idx].computed_rect = rect;
-      rc = apply_child_layout(flex->children[idx].widget, rect);
+      {
+        cmn_error_e child_rc =
+            apply_child_layout(flex->children[idx].widget, rect);
+        rc = (rc != CMN_SUCCESS) ? rc : child_rc;
+      }
       main_cursor += m_lead + item_main[idx] + m_trail + main_gap + extra_gap;
     }
 
@@ -1218,14 +1230,13 @@ cmn_error_e cmn_grid_add_child(cmn_grid_t *grid, void *child,
       kind != CMN_WIDGET_KIND_GRID) {
     return CMN_ERR_INVAL;
   }
-  if (style != NULL) {
+  rc = cmn_grid_item_style_init(&resolved_style);
+  if (style != NULL && rc == CMN_SUCCESS) {
     rc = validate_grid_item_style(style);
-    if (rc != CMN_SUCCESS) {
-      return rc;
-    }
     resolved_style = *style;
-  } else {
-    rc = cmn_grid_item_style_init(&resolved_style);
+  }
+  if (rc != CMN_SUCCESS) {
+    return rc;
   }
 
   if (grid->child_count >= CMN_LAYOUT_MAX_CHILDREN) {
@@ -1662,9 +1673,12 @@ cmn_error_e cmn_grid_compute_layout(cmn_grid_t *grid, int available_width,
   rc = resolve_grid_tracks(active_cols, num_cols, inner_w, grid->column_gap,
                            col_intrinsic, grid->padding.left, col_sizes,
                            col_offsets);
-  rc = resolve_grid_tracks(active_rows, num_rows, inner_h, grid->row_gap,
-                           row_intrinsic, grid->padding.top, row_sizes,
-                           row_offsets);
+  {
+    cmn_error_e row_rc = resolve_grid_tracks(
+        active_rows, num_rows, inner_h, grid->row_gap, row_intrinsic,
+        grid->padding.top, row_sizes, row_offsets);
+    rc = (rc != CMN_SUCCESS) ? rc : row_rc;
+  }
 
   /* 5. Compute each child's bounding rectangle within its spanned cell(s) */
   for (i = 0; i < grid->child_count; ++i) {
@@ -1735,7 +1749,10 @@ cmn_error_e cmn_grid_compute_layout(cmn_grid_t *grid, int available_width,
     rect.height = (final_h >= 0) ? final_h : 0;
 
     grid->children[i].computed_rect = rect;
-    rc = apply_child_layout(grid->children[i].widget, rect);
+    {
+      cmn_error_e child_rc = apply_child_layout(grid->children[i].widget, rect);
+      rc = (rc != CMN_SUCCESS) ? rc : child_rc;
+    }
   }
 
   return rc;
@@ -1777,11 +1794,15 @@ cmn_error_e cmn_window_set_layout(cmn_window_t *window,
   win_hdr->layout_root = layout_container;
 
   if (layout_kind == CMN_WIDGET_KIND_FLEX) {
-    rc = cmn_flex_compute_layout((cmn_flex_t *)layout_container,
-                                 win_hdr->bounds.width, win_hdr->bounds.height);
+    cmn_error_e flex_rc =
+        cmn_flex_compute_layout((cmn_flex_t *)layout_container,
+                                win_hdr->bounds.width, win_hdr->bounds.height);
+    rc = (rc != CMN_SUCCESS) ? rc : flex_rc;
   } else {
-    rc = cmn_grid_compute_layout((cmn_grid_t *)layout_container,
-                                 win_hdr->bounds.width, win_hdr->bounds.height);
+    cmn_error_e grid_rc =
+        cmn_grid_compute_layout((cmn_grid_t *)layout_container,
+                                win_hdr->bounds.width, win_hdr->bounds.height);
+    rc = (rc != CMN_SUCCESS) ? rc : grid_rc;
   }
   return rc;
 }

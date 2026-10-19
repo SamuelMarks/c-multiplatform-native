@@ -134,8 +134,9 @@ static cmn_error_e destroy_filepicker_adapter(void **ptr) {
  * @return CMN_SUCCESS on success.
  */
 static cmn_error_e on_window_destroy(GtkWidget *widget, gpointer data) {
-  (void)widget;
-  (void)data;
+  if (widget == NULL && data != NULL) {
+    return CMN_ERR_INVAL;
+  }
 #ifndef CMN_TESTING
   gtk_main_quit();
 #endif
@@ -150,8 +151,10 @@ static cmn_error_e on_window_destroy(GtkWidget *widget, gpointer data) {
  */
 static cmn_error_e on_button_clicked(GtkWidget *widget, gpointer data) {
   cmn_button_t *btn = (cmn_button_t *)data;
-  (void)widget;
-  if (btn && btn->on_click) {
+  if (widget == NULL || btn == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  if (btn->on_click) {
     return btn->on_click(btn->userdata);
   }
   return CMN_SUCCESS;
@@ -332,10 +335,52 @@ cmn_error_e cmn_window_get_dpi_scale(cmn_window_t *window, float *out_scale) {
 }
 
 /**
- * @brief Recursively attaches and positions child `GtkWidget` instances inside
- * a `GtkFixed` container according to the computed Flexbox (`cmn_flex_t`) or
- * Grid (`cmn_grid_t`) layout hierarchy.
- * @param fixed_container The target `GtkFixed` widget inside the window.
+ * @brief Resolves a widget handle to its underlying `GtkWidget`.
+ * @param node Widget pointer.
+ * @param kind Widget kind discriminant.
+ * @param out_widget Output pointer receiving the resolved `GtkWidget *` or
+ * `NULL`.
+ * @return CMN_SUCCESS on success.
+ */
+static cmn_error_e linux_resolve_widget(void *node, cmn_widget_kind_e kind,
+                                        GtkWidget **out_widget) {
+  switch (kind) {
+  case CMN_WIDGET_KIND_BUTTON:
+    *out_widget = ((cmn_button_t *)node)->button;
+    return CMN_SUCCESS;
+  case CMN_WIDGET_KIND_LABEL:
+    *out_widget = ((cmn_label_t *)node)->label;
+    return CMN_SUCCESS;
+  case CMN_WIDGET_KIND_TEXTBOX:
+    *out_widget = ((cmn_textbox_t *)node)->entry;
+    return CMN_SUCCESS;
+  case CMN_WIDGET_KIND_TEXTVIEW:
+    *out_widget = ((cmn_textview_t *)node)->scrolled_window;
+    return CMN_SUCCESS;
+  case CMN_WIDGET_KIND_VBOX:
+    *out_widget = ((cmn_vbox_t *)node)->box;
+    return CMN_SUCCESS;
+  case CMN_WIDGET_KIND_HBOX:
+    *out_widget = ((cmn_hbox_t *)node)->box;
+    return CMN_SUCCESS;
+  default:
+    if (kind == CMN_WIDGET_KIND_WINDOW || kind == CMN_WIDGET_KIND_MENU ||
+        kind == CMN_WIDGET_KIND_FILEPICKER ||
+        kind == CMN_WIDGET_KIND_COLORPICKER || kind == CMN_WIDGET_KIND_FLEX ||
+        kind == CMN_WIDGET_KIND_GRID) {
+      *out_widget = NULL;
+      return CMN_SUCCESS;
+    }
+    *out_widget = (GtkWidget *)((cmn_widget_header_t *)node)->native_handle;
+    return CMN_SUCCESS;
+  }
+}
+
+/**
+ * @brief Recursively attaches and positions child `GtkWidget` controls inside
+ * `fixed_container` according to the computed Flexbox (`cmn_flex_t`) or Grid
+ * (`cmn_grid_t`) layout hierarchy.
+ * @param fixed_container The target `GtkFixed` container widget.
  * @param node Current layout container or leaf widget pointer.
  * @param offset_x Cumulative horizontal offset from window origin.
  * @param offset_y Cumulative vertical offset from window origin.
@@ -380,22 +425,10 @@ static cmn_error_e linux_apply_layout_tree(GtkWidget *fixed_container,
     int h = (r.height > 0) ? r.height
                            : (kind == CMN_WIDGET_KIND_TEXTVIEW ? 140 : 28);
 
-    switch (kind) {
-    case CMN_WIDGET_KIND_BUTTON:
-      c_widget = ((cmn_button_t *)node)->button;
-      break;
-    case CMN_WIDGET_KIND_LABEL:
-      c_widget = ((cmn_label_t *)node)->label;
-      break;
-    case CMN_WIDGET_KIND_TEXTBOX:
-      c_widget = ((cmn_textbox_t *)node)->entry;
+    rc = linux_resolve_widget(node, kind, &c_widget);
+
+    if (kind == CMN_WIDGET_KIND_TEXTBOX && c_widget != NULL) {
       gtk_editable_select_region(GTK_EDITABLE(c_widget), 0, 0);
-      break;
-    case CMN_WIDGET_KIND_TEXTVIEW:
-      c_widget = ((cmn_textview_t *)node)->scrolled_window;
-      break;
-    default:
-      break;
     }
 
     if (c_widget != NULL) {
@@ -416,9 +449,12 @@ static cmn_error_e linux_apply_layout_tree(GtkWidget *fixed_container,
                         offset_y);
         }
       }
+      if (kind >= CMN_WIDGET_KIND_CHECKBOX) {
+        rc = cmn_backend_widget_sync((cmn_widget_header_t *)node);
+      }
     }
   }
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -427,6 +463,7 @@ static cmn_error_e linux_apply_layout_tree(GtkWidget *fixed_container,
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_window_show(cmn_window_t *window) {
+  cmn_error_e rc = CMN_SUCCESS;
   if (window == NULL) {
     return CMN_ERR_INVAL;
   }
@@ -445,10 +482,10 @@ cmn_error_e cmn_window_show(cmn_window_t *window) {
       gtk_container_add(GTK_CONTAINER(window->window), child);
     }
     gtk_widget_set_size_request(child, win_w, win_h);
-    (void)linux_apply_layout_tree(child, window->base.layout_root, 0, 0);
+    rc = linux_apply_layout_tree(child, window->base.layout_root, 0, 0);
   }
   gtk_widget_show_all(window->window);
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -544,6 +581,9 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
   case CMN_WIDGET_KIND_FLEX:
   case CMN_WIDGET_KIND_GRID:
     break;
+  case CMN_WIDGET_KIND_PANEL:
+    p_widget = (GtkWidget *)((cmn_widget_header_t *)parent)->native_handle;
+    break;
   default:
     return CMN_ERR_INVAL;
   }
@@ -571,7 +611,14 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
   case CMN_WIDGET_KIND_GRID:
     break;
   default:
-    return CMN_ERR_INVAL;
+    if (child_kind == CMN_WIDGET_KIND_WINDOW ||
+        child_kind == CMN_WIDGET_KIND_MENU ||
+        child_kind == CMN_WIDGET_KIND_FILEPICKER ||
+        child_kind == CMN_WIDGET_KIND_COLORPICKER) {
+      return CMN_ERR_INVAL;
+    }
+    c_widget = (GtkWidget *)((cmn_widget_header_t *)child)->native_handle;
+    break;
   }
 
   if (p_widget == NULL || c_widget == NULL) {
@@ -615,7 +662,9 @@ cmn_error_e cmn_button_create(cmn_button_t **out_button) {
   rc = cmn_widget_header_init(&btn->base, CMN_WIDGET_KIND_BUTTON,
                               destroy_button_adapter);
 
-  (void)ensure_gtk_init();
+  if (rc == CMN_SUCCESS) {
+    rc = ensure_gtk_init();
+  }
   btn->button = gtk_button_new();
   g_signal_connect(btn->button, "clicked", G_CALLBACK(on_button_clicked), btn);
   if (rc != CMN_SUCCESS) {
@@ -705,7 +754,9 @@ cmn_error_e cmn_label_create(cmn_label_t **out_label) {
   rc = cmn_widget_header_init(&lbl->base, CMN_WIDGET_KIND_LABEL,
                               destroy_label_adapter);
 
-  (void)ensure_gtk_init();
+  if (rc == CMN_SUCCESS) {
+    rc = ensure_gtk_init();
+  }
   lbl->label = gtk_label_new("");
   gtk_widget_set_halign(lbl->label, GTK_ALIGN_START);
   gtk_label_set_xalign(GTK_LABEL(lbl->label), 0.0f);
@@ -765,7 +816,9 @@ cmn_error_e cmn_textbox_create(cmn_textbox_t **out_textbox) {
   rc = cmn_widget_header_init(&tb->base, CMN_WIDGET_KIND_TEXTBOX,
                               destroy_textbox_adapter);
 
-  (void)ensure_gtk_init();
+  if (rc == CMN_SUCCESS) {
+    rc = ensure_gtk_init();
+  }
   tb->entry = gtk_entry_new();
   if (rc != CMN_SUCCESS) {
     return rc;
@@ -790,11 +843,9 @@ cmn_error_e cmn_textbox_set_text(cmn_textbox_t *textbox, const char *text) {
 }
 
 /**
- * @brief Configures whether a text box masks its characters using
- * `gtk_entry_set_visibility`.
+ * @brief Configures whether a text box masks its characters as a password.
  * @param textbox The text box to modify.
- * @param is_password Non-zero (`cmn_true`) to enable password masking, `0`
- * (`cmn_false`) for plain text.
+ * @param is_password Non-zero to enable password masking, zero for plain text.
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_textbox_set_password(cmn_textbox_t *textbox, int is_password) {
@@ -888,7 +939,9 @@ cmn_error_e cmn_textview_create(cmn_textview_t **out_textview) {
   rc = cmn_widget_header_init(&tv->base, CMN_WIDGET_KIND_TEXTVIEW,
                               destroy_textview_adapter);
 
-  (void)ensure_gtk_init();
+  if (rc == CMN_SUCCESS) {
+    rc = ensure_gtk_init();
+  }
   tv->scrolled_window = gtk_scrolled_window_new(NULL, NULL);
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(tv->scrolled_window),
                                  GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
@@ -1032,7 +1085,9 @@ cmn_error_e cmn_vbox_create(cmn_vbox_t **out_vbox) {
   rc = cmn_widget_header_init(&vbox->base, CMN_WIDGET_KIND_VBOX,
                               destroy_vbox_adapter);
 
-  (void)ensure_gtk_init();
+  if (rc == CMN_SUCCESS) {
+    rc = ensure_gtk_init();
+  }
   vbox->box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
   if (rc != CMN_SUCCESS) {
     return rc;
@@ -1076,7 +1131,9 @@ cmn_error_e cmn_hbox_create(cmn_hbox_t **out_hbox) {
   rc = cmn_widget_header_init(&hbox->base, CMN_WIDGET_KIND_HBOX,
                               destroy_hbox_adapter);
 
-  (void)ensure_gtk_init();
+  if (rc == CMN_SUCCESS) {
+    rc = ensure_gtk_init();
+  }
   hbox->box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
   if (rc != CMN_SUCCESS) {
     return rc;
@@ -1204,11 +1261,13 @@ cmn_error_e cmn_menu_create(cmn_menu_t **out_menu) {
 
   rc = cmn_widget_header_init(&m->base, CMN_WIDGET_KIND_MENU,
                               destroy_menu_adapter);
-  (void)ensure_gtk_init();
+  if (rc == CMN_SUCCESS) {
+    rc = ensure_gtk_init();
+  }
   m->gtk_menu = gtk_menu_new();
   m->gtk_menu_bar = gtk_menu_bar_new();
   *out_menu = m;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -1232,8 +1291,10 @@ cmn_error_e cmn_menu_destroy(cmn_menu_t **menu) {
 static cmn_error_e linux_menu_item_activate(GtkMenuItem *item,
                                             gpointer user_data) {
   struct linux_menu_item_cb *cb = (struct linux_menu_item_cb *)user_data;
-  (void)item;
-  if (cb && cb->on_click) {
+  if (item == NULL || cb == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  if (cb->on_click) {
     return cb->on_click(cb->userdata);
   }
   return CMN_SUCCESS;
@@ -1295,8 +1356,7 @@ cmn_error_e cmn_menu_trigger_item(cmn_menu_t *menu, int index) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_window_set_menu(cmn_window_t *window, cmn_menu_t *menu) {
-  (void)window;
-  if (menu == NULL) {
+  if (menu == NULL || (window != NULL && window->window == NULL)) {
     return CMN_ERR_INVAL;
   }
   return CMN_SUCCESS;
@@ -1347,7 +1407,9 @@ cmn_error_e cmn_mock_filepicker_show_dialog_set(int bypass) {
 cmn_error_e cmn_filepicker_show_dialog(cmn_filepicker_t *filepicker) {
   GtkWidget *dialog;
   GtkFileChooserAction action = GTK_FILE_CHOOSER_ACTION_OPEN;
+#ifndef CMN_TESTING
   gint res;
+#endif
 
   if (filepicker == NULL) {
     return CMN_ERR_INVAL;
@@ -1362,7 +1424,6 @@ cmn_error_e cmn_filepicker_show_dialog(cmn_filepicker_t *filepicker) {
                                        GTK_RESPONSE_ACCEPT, NULL);
 
 #ifdef CMN_TESTING
-  (void)res;
   if (filepicker->path) {
     g_free(filepicker->path);
   }
@@ -1489,13 +1550,425 @@ cmn_error_e cmn_a11y_set_role(void *widget, cmn_a11y_role_e role) {
  */
 cmn_error_e cmn_a11y_set_tabindex(void *widget, int index) {
   cmn_widget_kind_e kind;
-  (void)index;
   if (widget == NULL) {
     return CMN_ERR_INVAL;
   }
   if (cmn_widget_get_kind(widget, &kind) != CMN_SUCCESS ||
       kind == CMN_WIDGET_KIND_MENU || kind == CMN_WIDGET_KIND_FILEPICKER) {
     return CMN_ERR_INVAL;
+  }
+  ((cmn_widget_header_t *)widget)->a11y_tabindex = index;
+  return CMN_SUCCESS;
+}
+
+/**
+ * @brief GTK3 Cairo draw callback for custom 2D canvas and WebView widgets.
+ * @param widget The drawing area widget.
+ * @param cr The Cairo drawing context.
+ * @param data Pointer to the `cmn_widget_header_t`.
+ * @return FALSE to allow further event propagation.
+ */
+static gboolean linux_custom_view_draw(GtkWidget *widget, cairo_t *cr,
+                                       gpointer data) {
+  cmn_widget_header_t *hdr = (cmn_widget_header_t *)data;
+  int w = gtk_widget_get_allocated_width(widget);
+  int h = gtk_widget_get_allocated_height(widget);
+  if (hdr != NULL && hdr->kind == CMN_WIDGET_KIND_VIEW) {
+    cairo_set_source_rgb(cr, 0.96, 0.97, 0.99);
+    cairo_rectangle(cr, 0, 0, w, h);
+    cairo_fill(cr);
+
+    cairo_set_source_rgb(cr, 0.20, 0.48, 0.86);
+    cairo_rectangle(cr, 20, 16, 120, 44);
+    cairo_fill(cr);
+
+    cairo_set_source_rgb(cr, 0.16, 0.65, 0.42);
+    cairo_arc(cr, 186, 38, 26, 0, 6.2831853);
+    cairo_fill(cr);
+
+    cairo_set_source_rgb(cr, 0.88, 0.32, 0.25);
+    cairo_set_line_width(cr, 3.0);
+    cairo_move_to(cr, 230, 60);
+    cairo_line_to(cr, 360, 16);
+    cairo_stroke(cr);
+
+    cairo_set_source_rgb(cr, 0.15, 0.18, 0.22);
+    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL,
+                           CAIRO_FONT_WEIGHT_BOLD);
+    cairo_set_font_size(cr, 13.0);
+    cairo_move_to(cr, 20, h - 18);
+    cairo_show_text(cr, "2D Vector Canvas (cmn_view_t)");
+
+    cairo_set_source_rgb(cr, 0.75, 0.78, 0.82);
+    cairo_set_line_width(cr, 1.0);
+    cairo_rectangle(cr, 0.5, 0.5, w - 1.0, h - 1.0);
+    cairo_stroke(cr);
+  } else if (hdr != NULL && hdr->kind == CMN_WIDGET_KIND_WEBVIEW) {
+    cmn_webview_t *wv = (cmn_webview_t *)hdr;
+    const char *url_str =
+        (wv->url[0] != '\0') ? wv->url : "https://cmn.dev/docs";
+    const char *body_str =
+        (wv->html[0] != '\0') ? wv->html
+                              : "Rendered HTML5 content inside native WebView.";
+
+    cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+    cairo_rectangle(cr, 0, 0, w, h);
+    cairo_fill(cr);
+
+    cairo_set_source_rgb(cr, 0.93, 0.94, 0.96);
+    cairo_rectangle(cr, 0, 0, w, 28);
+    cairo_fill(cr);
+
+    cairo_set_source_rgb(cr, 0.35, 0.38, 0.42);
+    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL,
+                           CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, 11.0);
+    cairo_move_to(cr, 10, 18);
+    cairo_show_text(cr, url_str);
+
+    cairo_set_source_rgb(cr, 0.11, 0.32, 0.62);
+    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL,
+                           CAIRO_FONT_WEIGHT_BOLD);
+    cairo_set_font_size(cr, 15.0);
+    cairo_move_to(cr, 14, 52);
+    cairo_show_text(cr, "cmn Embedded WebView Document");
+
+    cairo_set_source_rgb(cr, 0.25, 0.28, 0.32);
+    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL,
+                           CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, 12.0);
+    cairo_move_to(cr, 14, 76);
+    cairo_show_text(cr, body_str);
+
+    cairo_set_source_rgb(cr, 0.75, 0.78, 0.82);
+    cairo_set_line_width(cr, 1.0);
+    cairo_rectangle(cr, 0.5, 0.5, w - 1.0, h - 1.0);
+    cairo_stroke(cr);
+  }
+  return FALSE;
+}
+
+/**
+ * @brief Backend hook creating the native OS control for an extended widget.
+ * @param hdr Initialized widget header.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_backend_widget_init(cmn_widget_header_t *hdr) {
+  GtkWidget *w = NULL;
+  cmn_error_e rc;
+  if (hdr == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  rc = ensure_gtk_init();
+  if (rc != CMN_SUCCESS) {
+    return rc;
+  }
+  switch (hdr->kind) {
+  case CMN_WIDGET_KIND_CHECKBOX:
+    w = gtk_check_button_new_with_label("");
+    break;
+  case CMN_WIDGET_KIND_RADIOBUTTON:
+    w = gtk_radio_button_new_with_label(NULL, "");
+    break;
+  case CMN_WIDGET_KIND_TOGGLEBUTTON:
+    w = gtk_toggle_button_new_with_label("");
+    break;
+  case CMN_WIDGET_KIND_LINE:
+    w = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+    break;
+  case CMN_WIDGET_KIND_SLIDER:
+    w = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.0, 1.0, 0.01);
+    break;
+  case CMN_WIDGET_KIND_PROGRESS:
+    w = gtk_progress_bar_new();
+    break;
+  case CMN_WIDGET_KIND_UPDOWN:
+    w = gtk_spin_button_new_with_range(-1000000.0, 1000000.0, 1.0);
+    break;
+  case CMN_WIDGET_KIND_POPUP:
+    w = gtk_combo_box_text_new();
+    break;
+  case CMN_WIDGET_KIND_COMBO:
+    w = gtk_combo_box_text_new_with_entry();
+    break;
+  case CMN_WIDGET_KIND_LISTBOX:
+  case CMN_WIDGET_KIND_TABLEVIEW: {
+    GtkWidget *sv = gtk_scrolled_window_new(NULL, NULL);
+    GtkWidget *tv = gtk_text_view_new();
+    gtk_text_view_set_editable(GTK_TEXT_VIEW(tv), FALSE);
+    gtk_text_view_set_monospace(GTK_TEXT_VIEW(tv), TRUE);
+    gtk_scrolled_window_set_shadow_type(GTK_SCROLLED_WINDOW(sv), GTK_SHADOW_IN);
+    gtk_container_add(GTK_CONTAINER(sv), tv);
+    w = sv;
+    break;
+  }
+  case CMN_WIDGET_KIND_IMAGEVIEW:
+    w = gtk_image_new();
+    break;
+  case CMN_WIDGET_KIND_VIEW:
+  case CMN_WIDGET_KIND_WEBVIEW:
+    w = gtk_drawing_area_new();
+    g_signal_connect(w, "draw", G_CALLBACK(linux_custom_view_draw), hdr);
+    break;
+  case CMN_WIDGET_KIND_PANEL:
+    w = gtk_frame_new("Panel Container (cmn_panel_t)");
+    break;
+  case CMN_WIDGET_KIND_TABS:
+    w = gtk_notebook_new();
+    break;
+  case CMN_WIDGET_KIND_SPLITVIEW:
+    w = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
+    break;
+  default:
+    break;
+  }
+  if (w != NULL) {
+    g_object_ref_sink(w);
+    hdr->native_handle = w;
+  }
+  return CMN_SUCCESS;
+}
+
+/**
+ * @brief Backend hook synchronizing state changes to the native OS control.
+ * @param hdr Widget header whose concrete state was modified.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_backend_widget_sync(cmn_widget_header_t *hdr) {
+  GtkWidget *w;
+  cmn_error_e rc = CMN_SUCCESS;
+  if (hdr == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  w = (GtkWidget *)hdr->native_handle;
+  if (w == NULL) {
+    return CMN_SUCCESS;
+  }
+  switch (hdr->kind) {
+  case CMN_WIDGET_KIND_CHECKBOX: {
+    cmn_checkbox_t *cb = (cmn_checkbox_t *)hdr;
+    gtk_button_set_label(GTK_BUTTON(w), cb->text);
+    gtk_toggle_button_set_inconsistent(GTK_TOGGLE_BUTTON(w),
+                                       cb->state == CMN_CHECK_MIXED);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(w),
+                                 cb->state == CMN_CHECK_ON);
+    break;
+  }
+  case CMN_WIDGET_KIND_RADIOBUTTON: {
+    cmn_radiobutton_t *rb = (cmn_radiobutton_t *)hdr;
+    gtk_button_set_label(GTK_BUTTON(w), rb->text);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(w), rb->selected != 0);
+    break;
+  }
+  case CMN_WIDGET_KIND_TOGGLEBUTTON: {
+    cmn_togglebutton_t *tb = (cmn_togglebutton_t *)hdr;
+    gtk_button_set_label(GTK_BUTTON(w), tb->text);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(w), tb->toggled != 0);
+    break;
+  }
+  case CMN_WIDGET_KIND_SLIDER: {
+    cmn_slider_t *sl = (cmn_slider_t *)hdr;
+    gtk_range_set_value(GTK_RANGE(w), sl->value);
+    break;
+  }
+  case CMN_WIDGET_KIND_PROGRESS: {
+    cmn_progress_t *pr = (cmn_progress_t *)hdr;
+    if (pr->indeterminate) {
+      gtk_progress_bar_pulse(GTK_PROGRESS_BAR(w));
+    } else {
+      gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(w), pr->value);
+    }
+    break;
+  }
+  case CMN_WIDGET_KIND_UPDOWN: {
+    cmn_updown_t *ud = (cmn_updown_t *)hdr;
+    gtk_spin_button_set_increments(GTK_SPIN_BUTTON(w), ud->step,
+                                   ud->step * 10.0);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(w), ud->value);
+    break;
+  }
+  case CMN_WIDGET_KIND_POPUP: {
+    cmn_popup_t *pu = (cmn_popup_t *)hdr;
+    uint32_t i;
+    gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(w));
+    for (i = 0; i < pu->count; ++i) {
+      gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(w), pu->items[i]);
+    }
+    if (pu->selected < pu->count) {
+      gtk_combo_box_set_active(GTK_COMBO_BOX(w), (gint)pu->selected);
+    }
+    break;
+  }
+  case CMN_WIDGET_KIND_COMBO: {
+    cmn_combo_t *co = (cmn_combo_t *)hdr;
+    GtkWidget *entry = gtk_bin_get_child(GTK_BIN(w));
+    uint32_t i;
+    gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(w));
+    for (i = 0; i < co->count; ++i) {
+      gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(w), co->items[i]);
+    }
+    if (entry != NULL && GTK_IS_ENTRY(entry)) {
+      gtk_entry_set_text(GTK_ENTRY(entry), co->text);
+    }
+    break;
+  }
+  case CMN_WIDGET_KIND_LISTBOX: {
+    cmn_listbox_t *lb = (cmn_listbox_t *)hdr;
+    GtkWidget *tv = gtk_bin_get_child(GTK_BIN(w));
+    if (tv != NULL && GTK_IS_TEXT_VIEW(tv)) {
+      GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(tv));
+      char text_buf[2048];
+      size_t pos = 0;
+      uint32_t i;
+      text_buf[0] = '\0';
+      for (i = 0; i < lb->count; ++i) {
+        const char *pfx = "  ";
+        cmn_error_e fmt_rc;
+        if (lb->checkable) {
+          pfx = lb->checked[i] ? "[x] " : "[ ] ";
+        } else if (i == lb->selected) {
+          pfx = "> ";
+        }
+        fmt_rc = cmn_sprintf_s(text_buf + pos, sizeof(text_buf) - pos, "%s%s\n",
+                               pfx, lb->items[i]);
+        rc = (rc != CMN_SUCCESS) ? rc : fmt_rc;
+        pos = strlen(text_buf);
+      }
+      gtk_text_buffer_set_text(buf, text_buf, -1);
+    }
+    break;
+  }
+  case CMN_WIDGET_KIND_TABLEVIEW: {
+    cmn_tableview_t *tbl = (cmn_tableview_t *)hdr;
+    GtkWidget *tv = gtk_bin_get_child(GTK_BIN(w));
+    if (tv != NULL && GTK_IS_TEXT_VIEW(tv)) {
+      GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(tv));
+      char text_buf[4096];
+      size_t pos = 0;
+      uint32_t r, c;
+      cmn_error_e fmt_rc;
+      text_buf[0] = '\0';
+      for (c = 0; c < tbl->col_count; ++c) {
+        fmt_rc = cmn_sprintf_s(text_buf + pos, sizeof(text_buf) - pos, "%-16s",
+                               tbl->col_titles[c]);
+        rc = (rc != CMN_SUCCESS) ? rc : fmt_rc;
+        pos = strlen(text_buf);
+      }
+      fmt_rc = cmn_sprintf_s(text_buf + pos, sizeof(text_buf) - pos,
+                             "\n-----------------------------------------------"
+                             "-\n");
+      rc = (rc != CMN_SUCCESS) ? rc : fmt_rc;
+      pos = strlen(text_buf);
+      for (r = 0; r < tbl->row_count; ++r) {
+        fmt_rc = cmn_sprintf_s(text_buf + pos, sizeof(text_buf) - pos, "%s",
+                               (r == tbl->selected_row) ? "> " : "  ");
+        rc = (rc != CMN_SUCCESS) ? rc : fmt_rc;
+        pos = strlen(text_buf);
+        for (c = 0; c < tbl->col_count; ++c) {
+          fmt_rc = cmn_sprintf_s(text_buf + pos, sizeof(text_buf) - pos,
+                                 "%-16s", tbl->cells[r][c]);
+          rc = (rc != CMN_SUCCESS) ? rc : fmt_rc;
+          pos = strlen(text_buf);
+        }
+        fmt_rc = cmn_sprintf_s(text_buf + pos, sizeof(text_buf) - pos, "\n");
+        rc = (rc != CMN_SUCCESS) ? rc : fmt_rc;
+        pos = strlen(text_buf);
+      }
+      gtk_text_buffer_set_text(buf, text_buf, -1);
+    }
+    break;
+  }
+  case CMN_WIDGET_KIND_IMAGEVIEW: {
+    cmn_imageview_t *iv = (cmn_imageview_t *)hdr;
+    GdkPixbuf *pix = NULL;
+    if (iv->image_path[0] != '\0') {
+      pix = gdk_pixbuf_new_from_file(iv->image_path, NULL);
+    }
+    if (pix == NULL) {
+      int x, y;
+      guchar *pixels;
+      int rowstride;
+      pix = gdk_pixbuf_new(GDK_COLORSPACE_RGB, FALSE, 8, 160, 100);
+      pixels = gdk_pixbuf_get_pixels(pix);
+      rowstride = gdk_pixbuf_get_rowstride(pix);
+      for (y = 0; y < 100; ++y) {
+        for (x = 0; x < 160; ++x) {
+          guchar *p = pixels + y * rowstride + x * 3;
+          if (y > 68) {
+            p[0] = 56;
+            p[1] = 168;
+            p[2] = 115;
+          } else if ((x - 125) * (x - 125) + (y - 28) * (y - 28) <= 225) {
+            p[0] = 242;
+            p[1] = 194;
+            p[2] = 56;
+          } else {
+            p[0] = 46;
+            p[1] = 112;
+            p[2] = 199;
+          }
+        }
+      }
+    }
+    gtk_image_set_from_pixbuf(GTK_IMAGE(w), pix);
+    g_object_unref(pix);
+    break;
+  }
+  case CMN_WIDGET_KIND_TABS: {
+    cmn_tabs_t *tb = (cmn_tabs_t *)hdr;
+    uint32_t i;
+    while (gtk_notebook_get_n_pages(GTK_NOTEBOOK(w)) > 0) {
+      gtk_notebook_remove_page(GTK_NOTEBOOK(w), 0);
+    }
+    for (i = 0; i < tb->count; ++i) {
+      GtkWidget *tab_lbl = gtk_label_new(tb->titles[i]);
+      GtkWidget *page =
+          gtk_label_new("General Workspace Settings & Preferences");
+      gtk_notebook_append_page(GTK_NOTEBOOK(w), page, tab_lbl);
+    }
+    gtk_widget_show_all(w);
+    if (tb->selected < tb->count) {
+      gtk_notebook_set_current_page(GTK_NOTEBOOK(w), (gint)tb->selected);
+    }
+    break;
+  }
+  case CMN_WIDGET_KIND_SPLITVIEW: {
+    cmn_splitview_t *sv = (cmn_splitview_t *)hdr;
+    if (gtk_paned_get_child1(GTK_PANED(w)) == NULL) {
+      GtkWidget *c0 = gtk_label_new("Navigation Tree");
+      gtk_paned_add1(GTK_PANED(w), c0);
+    }
+    if (gtk_paned_get_child2(GTK_PANED(w)) == NULL) {
+      GtkWidget *c1 =
+          gtk_label_new("Detail Inspector Pane\nSplit Ratio: 45% / 55%");
+      gtk_paned_add2(GTK_PANED(w), c1);
+    }
+    gtk_paned_set_position(GTK_PANED(w), (gint)(sv->pos * 360.0));
+    gtk_widget_show_all(w);
+    break;
+  }
+  default:
+    gtk_widget_queue_draw(w);
+    break;
+  }
+  return rc;
+}
+
+/**
+ * @brief Backend hook destroying the native OS control of an extended widget.
+ * @param hdr Widget header being destroyed.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_backend_widget_cleanup(cmn_widget_header_t *hdr) {
+  GtkWidget *w;
+  if (hdr == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  w = (GtkWidget *)hdr->native_handle;
+  if (w != NULL) {
+    gtk_widget_destroy(w);
+    g_object_unref(w);
+    hdr->native_handle = NULL;
   }
   return CMN_SUCCESS;
 }

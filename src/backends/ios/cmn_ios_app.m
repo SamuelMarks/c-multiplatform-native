@@ -90,7 +90,10 @@ cmn_error_e cmn_app_post_task(cmn_app_t *app, cmn_error_e (*task)(void *),
     return CMN_ERR_INVAL;
   }
   dispatch_async(dispatch_get_main_queue(), ^{
-    (void)task(userdata);
+    cmn_error_e task_rc = task(userdata);
+    if (task_rc != CMN_SUCCESS) {
+      app->is_running = 0;
+    }
   });
   return CMN_SUCCESS;
 }

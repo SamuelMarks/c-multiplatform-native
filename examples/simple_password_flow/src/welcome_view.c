@@ -24,19 +24,21 @@ welcome_view_data_t *g_welcome_data = NULL;
  */
 cmn_error_e welcome_view_cleanup(int destroy_root) {
   cmn_error_e rc = CMN_SUCCESS;
+  cmn_error_e clean_rc;
   if (g_welcome_data != NULL) {
     if (g_welcome_data->btn_logout != NULL) {
       rc = cmn_button_destroy(&g_welcome_data->btn_logout);
     }
     if (g_welcome_data->lbl_welcome != NULL) {
-      rc = (cmn_error_e)((int)rc |
-                         (int)cmn_label_destroy(&g_welcome_data->lbl_welcome));
+      clean_rc = cmn_label_destroy(&g_welcome_data->lbl_welcome);
+      rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
     }
     if (destroy_root && g_welcome_data->root != NULL) {
-      rc =
-          (cmn_error_e)((int)rc | (int)cmn_flex_destroy(&g_welcome_data->root));
+      clean_rc = cmn_flex_destroy(&g_welcome_data->root);
+      rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
     }
-    rc = (cmn_error_e)((int)rc | (int)cmn_free((void **)&g_welcome_data));
+    clean_rc = cmn_free((void **)&g_welcome_data);
+    rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
   }
   return rc;
 }
@@ -77,11 +79,14 @@ cmn_error_e welcome_view_factory(void *userdata, const char **params,
   cmn_edges_t pad = {20, 24, 20, 24};
   char welcome_msg[512];
 
-  (void)params;
-  (void)param_count;
+  if (params == NULL && param_count > 0) {
+    return CMN_ERR_INVAL;
+  }
 
   cleanup_rc = welcome_view_cleanup(0);
-  (void)cleanup_rc;
+  if (cleanup_rc != CMN_SUCCESS) {
+    return cleanup_rc;
+  }
 
   rc = cmn_calloc(1, sizeof(welcome_view_data_t), (void **)&data);
   if (rc != CMN_SUCCESS) {
@@ -93,36 +98,58 @@ cmn_error_e welcome_view_factory(void *userdata, const char **params,
   rc = cmn_flex_create(&data->root);
   if (rc != CMN_SUCCESS) {
     cleanup_rc = welcome_view_cleanup(1);
-    return rc != CMN_SUCCESS ? rc : cleanup_rc;
+    return (cleanup_rc != CMN_SUCCESS) ? cleanup_rc : rc;
   }
   rc = cmn_flex_set_direction(data->root, CMN_FLEX_COLUMN);
-  rc = cmn_flex_set_justify_content(data->root, CMN_JUSTIFY_CENTER);
-  rc = cmn_flex_set_align_items(data->root, CMN_ALIGN_CENTER);
-  rc = cmn_flex_set_gap(data->root, 16, 16);
-  rc = cmn_flex_set_padding(data->root, pad);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_flex_set_justify_content(data->root, CMN_JUSTIFY_CENTER);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_flex_set_align_items(data->root, CMN_ALIGN_CENTER);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_flex_set_gap(data->root, 16, 16);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_flex_set_padding(data->root, pad);
+  }
 
-  rc = cmn_label_create(&data->lbl_welcome);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_label_create(&data->lbl_welcome);
+  }
   if (rc != CMN_SUCCESS) {
     cleanup_rc = welcome_view_cleanup(1);
-    return rc != CMN_SUCCESS ? rc : cleanup_rc;
+    return (cleanup_rc != CMN_SUCCESS) ? cleanup_rc : rc;
   }
 
   rc = cmn_sprintf_s(welcome_msg, sizeof(welcome_msg), "Welcome %s",
                      state->username);
-  rc = cmn_label_set_text(data->lbl_welcome, welcome_msg);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_label_set_text(data->lbl_welcome, welcome_msg);
+  }
 
-  rc = cmn_button_create(&data->btn_logout);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_button_create(&data->btn_logout);
+  }
   if (rc != CMN_SUCCESS) {
     cleanup_rc = welcome_view_cleanup(1);
-    return rc != CMN_SUCCESS ? rc : cleanup_rc;
+    return (cleanup_rc != CMN_SUCCESS) ? cleanup_rc : rc;
   }
 
   rc = cmn_button_set_text(data->btn_logout, "Logout");
-  rc = cmn_button_set_on_click(data->btn_logout, on_logout_click, data);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_button_set_on_click(data->btn_logout, on_logout_click, data);
+  }
 
-  rc = cmn_flex_add_child(data->root, data->lbl_welcome, NULL);
-  rc = cmn_flex_add_child(data->root, data->btn_logout, NULL);
-  rc = cmn_flex_compute_layout(data->root, 480, 360);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_flex_add_child(data->root, data->lbl_welcome, NULL);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_flex_add_child(data->root, data->btn_logout, NULL);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_flex_compute_layout(data->root, 480, 360);
+  }
 
   *out_widget = data->root;
   return rc;

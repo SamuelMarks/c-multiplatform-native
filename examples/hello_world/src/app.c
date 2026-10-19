@@ -64,47 +64,81 @@ cmn_error_e hello_world_app_init(hello_world_app_t **out_app) {
   }
   rc = cmn_window_set_title(ctx->window, "Hello World");
 
-  rc = cmn_flex_create(&ctx->flex);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_flex_create(&ctx->flex);
+  }
   if (rc != CMN_SUCCESS) {
     goto cleanup;
   }
   rc = cmn_flex_set_direction(ctx->flex, CMN_FLEX_COLUMN);
-  rc = cmn_flex_set_gap(ctx->flex, 12, 12);
-  rc = cmn_flex_set_padding(ctx->flex, pad);
-  rc =
-      cmn_flex_add_breakpoint(ctx->flex, 360, CMN_FLEX_COLUMN, CMN_FLEX_NOWRAP);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_flex_set_gap(ctx->flex, 12, 12);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_flex_set_padding(ctx->flex, pad);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_flex_add_breakpoint(ctx->flex, 360, CMN_FLEX_COLUMN,
+                                 CMN_FLEX_NOWRAP);
+  }
 
-  rc = cmn_label_create(&ctx->label);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_label_create(&ctx->label);
+  }
   if (rc != CMN_SUCCESS) {
     goto cleanup;
   }
   rc = cmn_label_set_text(ctx->label, "Hello!, I'm a label");
-  rc = cmn_widget_set_bounds(ctx->label, lbl_bounds);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_widget_set_bounds(ctx->label, lbl_bounds);
+  }
 
-  rc = cmn_button_create(&ctx->button);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_button_create(&ctx->button);
+  }
   if (rc != CMN_SUCCESS) {
     goto cleanup;
   }
   rc = cmn_button_set_text(ctx->button, "Click Me!");
-  rc = cmn_button_set_on_click(ctx->button, handle_button_click, ctx);
-  rc = cmn_widget_set_bounds(ctx->button, btn_bounds);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_button_set_on_click(ctx->button, handle_button_click, ctx);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_widget_set_bounds(ctx->button, btn_bounds);
+  }
 
-  rc = cmn_textview_create(&ctx->textview);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_textview_create(&ctx->textview);
+  }
   if (rc != CMN_SUCCESS) {
     goto cleanup;
   }
   rc = cmn_widget_set_bounds(ctx->textview, tv_bounds);
 
-  rc = cmn_flex_add_child(ctx->flex, ctx->label, NULL);
-  rc = cmn_flex_add_child(ctx->flex, ctx->button, NULL);
-  rc = cmn_flex_item_style_init(&tv_style);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_flex_add_child(ctx->flex, ctx->label, NULL);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_flex_add_child(ctx->flex, ctx->button, NULL);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_flex_item_style_init(&tv_style);
+  }
   tv_style.flex_grow = 1.0f;
   tv_style.flex_basis = 140;
   tv_style.min_height = 80;
-  rc = cmn_flex_add_child(ctx->flex, ctx->textview, &tv_style);
-  rc = cmn_window_set_layout(ctx->window, ctx->flex);
-  rc = cmn_window_set_size(ctx->window, 480, 360);
-  rc = cmn_window_show(ctx->window);
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_flex_add_child(ctx->flex, ctx->textview, &tv_style);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_window_set_layout(ctx->window, ctx->flex);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_window_set_size(ctx->window, 480, 360);
+  }
+  if (rc == CMN_SUCCESS) {
+    rc = cmn_window_show(ctx->window);
+  }
 
   *out_app = ctx;
   return rc;
@@ -112,26 +146,26 @@ cmn_error_e hello_world_app_init(hello_world_app_t **out_app) {
 cleanup:
   if (ctx->button != NULL) {
     clean_rc = cmn_button_destroy(&ctx->button);
-    (void)clean_rc;
+    rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
   }
   if (ctx->label != NULL) {
     clean_rc = cmn_label_destroy(&ctx->label);
-    (void)clean_rc;
+    rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
   }
   if (ctx->flex != NULL) {
     clean_rc = cmn_flex_destroy(&ctx->flex);
-    (void)clean_rc;
+    rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
   }
   if (ctx->window != NULL) {
     clean_rc = cmn_window_destroy(&ctx->window);
-    (void)clean_rc;
+    rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
   }
   if (ctx->app != NULL) {
     clean_rc = cmn_app_destroy(&ctx->app);
-    (void)clean_rc;
+    rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
   }
   clean_rc = cmn_free((void **)&ctx);
-  (void)clean_rc;
+  rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
   *out_app = NULL;
   return rc;
 }
@@ -156,6 +190,7 @@ cmn_error_e hello_world_app_run(hello_world_app_t *app) {
 cmn_error_e hello_world_app_destroy(hello_world_app_t **app) {
   hello_world_app_t *ctx;
   cmn_error_e rc = CMN_SUCCESS;
+  cmn_error_e clean_rc;
 
   if (app == NULL || *app == NULL) {
     return CMN_ERR_INVAL;
@@ -167,22 +202,28 @@ cmn_error_e hello_world_app_destroy(hello_world_app_t **app) {
     rc = cmn_textview_destroy(&ctx->textview);
   }
   if (ctx->button != NULL) {
-    rc = (cmn_error_e)((int)rc | (int)cmn_button_destroy(&ctx->button));
+    clean_rc = cmn_button_destroy(&ctx->button);
+    rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
   }
   if (ctx->label != NULL) {
-    rc = (cmn_error_e)((int)rc | (int)cmn_label_destroy(&ctx->label));
+    clean_rc = cmn_label_destroy(&ctx->label);
+    rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
   }
   if (ctx->flex != NULL) {
-    rc = (cmn_error_e)((int)rc | (int)cmn_flex_destroy(&ctx->flex));
+    clean_rc = cmn_flex_destroy(&ctx->flex);
+    rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
   }
   if (ctx->window != NULL) {
-    rc = (cmn_error_e)((int)rc | (int)cmn_window_destroy(&ctx->window));
+    clean_rc = cmn_window_destroy(&ctx->window);
+    rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
   }
   if (ctx->app != NULL) {
-    rc = (cmn_error_e)((int)rc | (int)cmn_app_destroy(&ctx->app));
+    clean_rc = cmn_app_destroy(&ctx->app);
+    rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
   }
 
-  rc = (cmn_error_e)((int)rc | (int)cmn_free((void **)&ctx));
+  clean_rc = cmn_free((void **)&ctx);
+  rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
   *app = NULL;
   return rc;
 }

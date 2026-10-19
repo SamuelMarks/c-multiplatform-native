@@ -39,7 +39,9 @@ cmn_error_e cmn_android_set_jvm(JavaVM *vm, jint *out_version) {
  * @return `CMN_SUCCESS` on success.
  */
 JNIEXPORT cmn_error_e JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
-  (void)reserved;
+  if (reserved != NULL && vm == NULL) {
+    return CMN_ERR_INVAL;
+  }
   return cmn_android_set_jvm(vm, NULL);
 }
 

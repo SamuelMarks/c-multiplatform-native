@@ -38,14 +38,17 @@ int main(int argc, char **argv) {
   }
 
   if (web_html_dir != NULL) {
-    static const char *const names[4] = {"button_web.html", "inputs_web.html",
-                                         "hello_world_web.html",
-                                         "password_flow_web.html"};
-    for (i = 0; i < 4; ++i) {
+    for (i = 0; i < CMN_SCREENSHOT_SCENE_COUNT; ++i) {
+      const char *name = NULL;
       char html_path[1024];
-      (void)cmn_sprintf_s(html_path, sizeof(html_path), "%s/%s", web_html_dir,
-                          names[i]);
-      rc = cmn_screenshot_write_web_html(i, html_path);
+      rc = cmn_screenshot_get_scene_name(i, &name);
+      if (rc == CMN_SUCCESS) {
+        rc = cmn_sprintf_s(html_path, sizeof(html_path), "%s/%s_web.html",
+                           web_html_dir, name);
+      }
+      if (rc == CMN_SUCCESS) {
+        rc = cmn_screenshot_write_web_html(i, html_path);
+      }
       if (rc != CMN_SUCCESS) {
         return (int)rc;
       }

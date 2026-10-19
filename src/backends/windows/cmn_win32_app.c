@@ -69,6 +69,7 @@ cmn_error_e cmn_app_create(cmn_app_t **out_app) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_app_run(cmn_app_t *app) {
+  cmn_error_e rc = CMN_SUCCESS;
   if (app == NULL) {
     return CMN_ERR_INVAL;
   }
@@ -83,10 +84,13 @@ cmn_error_e cmn_app_run(cmn_app_t *app) {
         struct win32_task_payload_s *payload =
             (struct win32_task_payload_s *)msg.lParam;
         if (payload != NULL) {
+          cmn_error_e free_rc;
           if (payload->task != NULL) {
-            (void)payload->task(payload->userdata);
+            cmn_error_e task_rc = payload->task(payload->userdata);
+            rc = (rc != CMN_SUCCESS) ? rc : task_rc;
           }
-          (void)cmn_free((void **)&payload);
+          free_rc = cmn_free((void **)&payload);
+          rc = (rc != CMN_SUCCESS) ? rc : free_rc;
         }
       } else {
         TranslateMessage(&msg);
@@ -96,7 +100,7 @@ cmn_error_e cmn_app_run(cmn_app_t *app) {
   }
 #endif
 
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -158,8 +162,8 @@ cmn_error_e cmn_app_post_task(cmn_app_t *app, cmn_error_e (*task)(void *),
     payload->task = task;
     payload->userdata = userdata;
     if (!PostThreadMessageW(app->thread_id, CMN_WM_TASK, 0, (LPARAM)payload)) {
-      (void)cmn_free((void **)&payload);
-      return CMN_ERR_IO;
+      rc = cmn_free((void **)&payload);
+      return rc != CMN_SUCCESS ? rc : CMN_ERR_IO;
     }
   }
   return CMN_SUCCESS;

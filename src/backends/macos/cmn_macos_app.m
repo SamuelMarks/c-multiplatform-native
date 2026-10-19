@@ -25,15 +25,15 @@ struct cmn_app_s {
 
 @implementation CmnAppDelegate
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
-  (void)notification;
-  [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
-  [NSApp activateIgnoringOtherApps:YES];
+  if (notification != nil) {
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+    [NSApp activateIgnoringOtherApps:YES];
+  }
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:
     (NSApplication *)sender {
-  (void)sender;
-  return YES;
+  return sender != nil ? YES : YES;
 }
 @end
 
@@ -78,10 +78,15 @@ cmn_error_e cmn_macos_test_exercise_delegate(cmn_app_t *app) {
   }
   @autoreleasepool {
     CmnAppDelegate *del = (CmnAppDelegate *)app->delegate;
+    BOOL should_term;
     [del applicationDidFinishLaunching:[NSNotification
                                            notificationWithName:@"Test"
                                                          object:nil]];
-    (void)[del applicationShouldTerminateAfterLastWindowClosed:app->ns_app];
+    should_term =
+        [del applicationShouldTerminateAfterLastWindowClosed:app->ns_app];
+    if (!should_term) {
+      return CMN_ERR_IO;
+    }
   }
   return CMN_SUCCESS;
 }
@@ -169,7 +174,10 @@ cmn_error_e cmn_app_post_task(cmn_app_t *app, cmn_error_e (*task)(void *),
   return task(userdata);
 #else
   dispatch_async(dispatch_get_main_queue(), ^{
-    (void)task(userdata);
+    cmn_error_e task_rc = task(userdata);
+    if (task_rc != CMN_SUCCESS) {
+      [app->ns_app stop:nil];
+    }
   });
   return CMN_SUCCESS;
 #endif

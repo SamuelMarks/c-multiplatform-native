@@ -24,6 +24,7 @@ cmn_error_e app_main(void) {
   cmn_error_e rc;
   cmn_error_e c1_rc;
   cmn_error_e c2_rc;
+  cmn_error_e clean_rc;
   cmn_app_t *app = NULL;
   cmn_window_t *win = NULL;
   cmn_router_t *router = NULL;
@@ -36,54 +37,68 @@ cmn_error_e app_main(void) {
 
   rc = cmn_window_create(app, &win);
   if (rc != CMN_SUCCESS) {
-    (void)cmn_app_destroy(&app);
-    return rc;
+    clean_rc = cmn_app_destroy(&app);
+    return (clean_rc != CMN_SUCCESS) ? clean_rc : rc;
   }
 
   rc = cmn_window_set_title(win, "Simple Password Flow");
   if (rc != CMN_SUCCESS) {
-    (void)cmn_window_destroy(&win);
-    (void)cmn_app_destroy(&app);
-    return rc;
+    c1_rc = cmn_window_destroy(&win);
+    c2_rc = cmn_app_destroy(&app);
+    clean_rc = (c1_rc != CMN_SUCCESS) ? c1_rc : c2_rc;
+    return (clean_rc != CMN_SUCCESS) ? clean_rc : rc;
   }
 
   rc = cmn_router_create(win, &router);
   if (rc != CMN_SUCCESS) {
-    (void)cmn_window_destroy(&win);
-    (void)cmn_app_destroy(&app);
-    return rc;
+    c1_rc = cmn_window_destroy(&win);
+    c2_rc = cmn_app_destroy(&app);
+    clean_rc = (c1_rc != CMN_SUCCESS) ? c1_rc : c2_rc;
+    return (clean_rc != CMN_SUCCESS) ? clean_rc : rc;
   }
 
   rc = app_state_init(&state, router);
   if (rc != CMN_SUCCESS) {
-    (void)cmn_router_destroy(&router);
-    (void)cmn_window_destroy(&win);
-    (void)cmn_app_destroy(&app);
-    return rc;
+    clean_rc = cmn_router_destroy(&router);
+    c1_rc = cmn_window_destroy(&win);
+    c2_rc = cmn_app_destroy(&app);
+    return (clean_rc != CMN_SUCCESS) ? clean_rc
+           : (c1_rc != CMN_SUCCESS)  ? c1_rc
+           : (c2_rc != CMN_SUCCESS)  ? c2_rc
+                                     : rc;
   }
   rc = cmn_router_register(router, "/login", login_view_factory, &state);
   if (rc != CMN_SUCCESS) {
-    (void)cmn_router_destroy(&router);
-    (void)cmn_window_destroy(&win);
-    (void)cmn_app_destroy(&app);
-    return rc;
+    clean_rc = cmn_router_destroy(&router);
+    c1_rc = cmn_window_destroy(&win);
+    c2_rc = cmn_app_destroy(&app);
+    return (clean_rc != CMN_SUCCESS) ? clean_rc
+           : (c1_rc != CMN_SUCCESS)  ? c1_rc
+           : (c2_rc != CMN_SUCCESS)  ? c2_rc
+                                     : rc;
   }
   rc = cmn_router_register(router, "/welcome", welcome_view_factory, &state);
   if (rc != CMN_SUCCESS) {
-    (void)cmn_router_destroy(&router);
-    (void)cmn_window_destroy(&win);
-    (void)cmn_app_destroy(&app);
-    return rc;
+    clean_rc = cmn_router_destroy(&router);
+    c1_rc = cmn_window_destroy(&win);
+    c2_rc = cmn_app_destroy(&app);
+    return (clean_rc != CMN_SUCCESS) ? clean_rc
+           : (c1_rc != CMN_SUCCESS)  ? c1_rc
+           : (c2_rc != CMN_SUCCESS)  ? c2_rc
+                                     : rc;
   }
 
   rc = cmn_router_navigate(router, "/login");
   if (rc != CMN_SUCCESS) {
     c1_rc = login_view_cleanup(0);
     c2_rc = welcome_view_cleanup(0);
-    (void)cmn_router_destroy(&router);
-    (void)cmn_window_destroy(&win);
-    (void)cmn_app_destroy(&app);
-    return rc != CMN_SUCCESS ? rc : (c1_rc != CMN_SUCCESS ? c1_rc : c2_rc);
+    rc = (c1_rc != CMN_SUCCESS) ? c1_rc : (c2_rc != CMN_SUCCESS) ? c2_rc : rc;
+    clean_rc = cmn_router_destroy(&router);
+    rc = (clean_rc != CMN_SUCCESS) ? clean_rc : rc;
+    clean_rc = cmn_window_destroy(&win);
+    rc = (clean_rc != CMN_SUCCESS) ? clean_rc : rc;
+    clean_rc = cmn_app_destroy(&app);
+    return (clean_rc != CMN_SUCCESS) ? clean_rc : rc;
   }
 
   rc = cmn_window_show(win);
@@ -93,11 +108,17 @@ cmn_error_e app_main(void) {
 
   c1_rc = login_view_cleanup(0);
   c2_rc = welcome_view_cleanup(0);
-  (void)cmn_router_destroy(&router);
-  (void)cmn_window_destroy(&win);
-  (void)cmn_app_destroy(&app);
+  if (rc == CMN_SUCCESS) {
+    rc = (c1_rc != CMN_SUCCESS) ? c1_rc : c2_rc;
+  }
+  clean_rc = cmn_router_destroy(&router);
+  rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
+  clean_rc = cmn_window_destroy(&win);
+  rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
+  clean_rc = cmn_app_destroy(&app);
+  rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
 
-  return rc != CMN_SUCCESS ? rc : (c1_rc != CMN_SUCCESS ? c1_rc : c2_rc);
+  return rc;
 }
 
 #ifndef CMN_TESTING

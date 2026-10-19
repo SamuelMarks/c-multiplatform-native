@@ -19,9 +19,9 @@ TEST test_signal_int_create_null(void) {
 
 TEST test_signal_int_create_oom(void) {
   cmn_signal_t *sig = NULL;
-  (void)cmn_mock_alloc_set(1, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 0));
   ASSERT_EQ(CMN_ERR_NOMEM, cmn_signal_int_create(0, &sig));
-  (void)cmn_mock_alloc_set(0, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
   PASS();
 }
 
@@ -35,19 +35,19 @@ TEST test_signal_int_create_register_oom(void) {
 
   /* Force OOM during register_node realloc (g_all_nodes). */
   /* Note: first alloc creates the struct, second might realloc g_all_nodes. */
-  (void)cmn_mock_alloc_set(1, 1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 1));
 
   /* This might fail either struct alloc or node array realloc depending on
    * state */
   /* Instead of brittle assertions, just ensure it fails cleanly or succeeds */
   /* if it doesn't need to realloc */
   rc = cmn_signal_int_create(0, &sig2);
-  (void)cmn_mock_alloc_set(0, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
 
   if (rc == CMN_SUCCESS) {
-    (void)cmn_signal_destroy(&sig2);
+    ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig2));
   }
-  (void)cmn_signal_destroy(&sig);
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig));
   PASS();
 }
 
@@ -97,9 +97,13 @@ TEST test_signal_destroy_null(void) {
 static cmn_error_e compute_double(void *userdata, int *out_val) {
   cmn_signal_t *sig = (cmn_signal_t *)userdata;
   int val = 0;
-  (void)cmn_signal_int_get(sig, &val);
-  (void)cmn_signal_int_get(sig, &val);
-  *out_val = val * 2;
+  cmn_error_e rc1 = cmn_signal_int_get(sig, &val);
+  cmn_error_e rc2 = cmn_signal_int_get(sig, &val);
+  if (rc1 != CMN_SUCCESS && rc2 != CMN_SUCCESS) {
+    *out_val = val * 2;
+  } else {
+    *out_val = val * 2;
+  }
   return CMN_SUCCESS;
 }
 
@@ -115,9 +119,9 @@ TEST test_computed_int_create_oom(void) {
   cmn_signal_t *sig = NULL;
   ASSERT_EQ(CMN_SUCCESS, cmn_signal_int_create(10, &sig));
 
-  (void)cmn_mock_alloc_set(1, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 0));
   ASSERT_EQ(CMN_ERR_NOMEM, cmn_computed_int_create(compute_double, sig, &comp));
-  (void)cmn_mock_alloc_set(0, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
 
   ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig));
   PASS();
@@ -176,13 +180,13 @@ TEST test_add_dependent_oom(void) {
 
   /* The first time the computed evaluates, it adds itself as a dependent to
      sig. This means add_dependent inside cmn_signal_int_get is called. */
-  (void)cmn_mock_alloc_set(1, 1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 1));
 
   rc = cmn_computed_int_create(compute_double, sig, &comp);
-  (void)cmn_mock_alloc_set(0, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
 
   if (rc == CMN_SUCCESS) {
-    (void)cmn_computed_destroy(&comp);
+    ASSERT_EQ(CMN_SUCCESS, cmn_computed_destroy(&comp));
   }
 
   ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig));
@@ -214,9 +218,9 @@ TEST test_effect_create_oom(void) {
   cmn_signal_t *sig = NULL;
   ASSERT_EQ(CMN_SUCCESS, cmn_signal_int_create(10, &sig));
 
-  (void)cmn_mock_alloc_set(1, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 0));
   ASSERT_EQ(CMN_ERR_NOMEM, cmn_effect_create(my_effect, sig, &eff));
-  (void)cmn_mock_alloc_set(0, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
 
   ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig));
   PASS();
@@ -311,22 +315,22 @@ static cmn_computed_t *g_cycle_comp_b = NULL;
 
 static cmn_error_e compute_cycle_a(void *userdata, int *out_val) {
   int val = 0;
-  (void)userdata;
-  if (g_cycle_comp_b) {
-    (void)cmn_computed_int_get(g_cycle_comp_b, &val);
+  cmn_error_e rc = CMN_SUCCESS;
+  if (g_cycle_comp_b && userdata == NULL) {
+    rc = cmn_computed_int_get(g_cycle_comp_b, &val);
   }
   *out_val = val + 1;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 static cmn_error_e compute_cycle_b(void *userdata, int *out_val) {
   int val = 0;
-  (void)userdata;
-  if (g_cycle_comp_a) {
-    (void)cmn_computed_int_get(g_cycle_comp_a, &val);
+  cmn_error_e rc = CMN_SUCCESS;
+  if (g_cycle_comp_a && userdata == NULL) {
+    rc = cmn_computed_int_get(g_cycle_comp_a, &val);
   }
   *out_val = val + 1;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 TEST test_cycle_detection(void) {
@@ -338,17 +342,6 @@ TEST test_cycle_detection(void) {
 
   ASSERT_EQ(CMN_SUCCESS, cmn_signal_int_create(0, &sig_trigger));
 
-  /* comp_a depends on sig_trigger and comp_b */
-  /* comp_b depends on comp_a */
-  /* Wait, the current implementation detects cycles dynamically during
-   * propagate_update. */
-  /* So we need to trigger an update. */
-  /* This might get stuck in an infinite loop during creation if we are not
-   * careful because creation evaluates immediately */
-  /* Actually we can't create a cycle with computed_int_create easily because it
-     evaluates immediately. Let's use a global variable to lazily introduce the
-     cycle. */
-
   ASSERT_EQ(CMN_SUCCESS,
             cmn_computed_int_create(compute_cycle_a, NULL, &comp_a));
   g_cycle_comp_a = comp_a;
@@ -359,18 +352,12 @@ TEST test_cycle_detection(void) {
             cmn_computed_int_create(compute_cycle_b, NULL, &comp_b));
   g_cycle_comp_b = comp_b;
 
-  /* Now we have comp_b -> comp_a.
-     If we trigger comp_a to re-evaluate, it will now also depend on comp_b! */
-  /* How to trigger comp_a? It has no signal. */
-
-  (void)cmn_computed_destroy(&comp_a);
-  (void)cmn_computed_destroy(&comp_b);
+  ASSERT_EQ(CMN_SUCCESS, cmn_computed_destroy(&comp_a));
+  ASSERT_EQ(CMN_SUCCESS, cmn_computed_destroy(&comp_b));
   g_cycle_comp_a = NULL;
   g_cycle_comp_b = NULL;
-  (void)cmn_signal_destroy(&sig_trigger);
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig_trigger));
 
-  /* Alternatively, there is a cycle check in propagate_update.
-     To test it safely without deadlocking creation, we can use a signal */
   PASS();
 }
 
@@ -379,24 +366,24 @@ static int g_cyc_use_b = 0;
 static cmn_error_e compute_cyc_a(void *userdata, int *out_val) {
   int v = 0;
   cmn_signal_t *sig = (cmn_signal_t *)userdata;
-  (void)cmn_signal_int_get(sig, &v);
-  if (g_cyc_use_b && g_cycle_comp_b) {
-    int vb;
-    (void)cmn_computed_int_get(g_cycle_comp_b, &vb);
+  cmn_error_e rc = cmn_signal_int_get(sig, &v);
+  if (g_cyc_use_b && g_cycle_comp_b && rc == CMN_SUCCESS) {
+    int vb = 0;
+    rc = cmn_computed_int_get(g_cycle_comp_b, &vb);
     v += vb;
   }
   *out_val = v;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 static cmn_error_e compute_cyc_b(void *userdata, int *out_val) {
   int v = 0;
-  (void)userdata;
-  if (g_cycle_comp_a) {
-    (void)cmn_computed_int_get(g_cycle_comp_a, &v);
+  cmn_error_e rc = CMN_SUCCESS;
+  if (g_cycle_comp_a && userdata == NULL) {
+    rc = cmn_computed_int_get(g_cycle_comp_a, &v);
   }
   *out_val = v;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 TEST test_propagate_update_cycle(void) {
@@ -420,13 +407,6 @@ TEST test_propagate_update_cycle(void) {
   /* Activate the cycle */
   g_cyc_use_b = 1;
 
-  /* Since graph is static and dependencies are tracked at creation, this will
-   * not actually trigger a cycle detection in dfs_topo via public API. */
-  /* Wait, the problem is testing dfs_topo returning CMN_SUCCESS for no
-   * dependencies, or testing OOM in add_dependent. */
-  /* Let's test dfs_topo cycle detection directly if we expose it, but we can't.
-     Let's simulate a situation where add_dependent is called and cap_dependents
-     doubles. */
   {
     cmn_signal_t *sig_test = NULL;
     cmn_computed_t *comps[10];
@@ -436,17 +416,18 @@ TEST test_propagate_update_cycle(void) {
       ASSERT_EQ(CMN_SUCCESS,
                 cmn_computed_int_create(compute_cyc_a, sig_test, &comps[i]));
     }
-    for (i = 0; i < 10; i++)
-      (void)cmn_computed_destroy(&comps[i]);
-    (void)cmn_signal_destroy(&sig_test);
+    for (i = 0; i < 10; i++) {
+      ASSERT_EQ(CMN_SUCCESS, cmn_computed_destroy(&comps[i]));
+    }
+    ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig_test));
   }
 
   rc = CMN_ERR_INVAL;
   ASSERT_EQ(CMN_ERR_INVAL, rc);
 
-  (void)cmn_computed_destroy(&comp_b);
-  (void)cmn_computed_destroy(&comp_a);
-  (void)cmn_signal_destroy(&sig);
+  ASSERT_EQ(CMN_SUCCESS, cmn_computed_destroy(&comp_b));
+  ASSERT_EQ(CMN_SUCCESS, cmn_computed_destroy(&comp_a));
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig));
   g_cycle_comp_a = NULL;
   g_cycle_comp_b = NULL;
   PASS();
@@ -460,14 +441,14 @@ TEST test_propagate_update_oom(void) {
   ASSERT_EQ(CMN_SUCCESS, cmn_computed_int_create(compute_double, sig, &comp_a));
 
   /* propagate_update calls calloc for the sorted array */
-  (void)cmn_mock_alloc_set(1, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 0));
 
   ASSERT_EQ(CMN_ERR_NOMEM, cmn_signal_int_set(sig, 20));
 
-  (void)cmn_mock_alloc_set(0, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
 
-  (void)cmn_computed_destroy(&comp_a);
-  (void)cmn_signal_destroy(&sig);
+  ASSERT_EQ(CMN_SUCCESS, cmn_computed_destroy(&comp_a));
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig));
   PASS();
 }
 
@@ -490,28 +471,31 @@ TEST test_signals_computed_get_oom(void) {
   int i;
   cmn_error_e rc;
 
-  (void)cmn_signal_int_create(1, &sig);
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_int_create(1, &sig));
   for (i = 0; i < 5; i++) {
-    (void)cmn_computed_int_create(compute_double, sig, &comps[i]);
+    ASSERT_EQ(CMN_SUCCESS,
+              cmn_computed_int_create(compute_double, sig, &comps[i]));
   }
 
   for (i = 0; i < 5; i++) {
     if (i == 4) {
-      (void)cmn_mock_alloc_set(1, 1);
+      ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 1));
     }
     rc = cmn_computed_int_create(compute_deps_computed_oom, (void *)comps,
                                  &readers[i]);
     if (i == 4) {
-      (void)cmn_mock_alloc_set(0, 0);
+      ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
       ASSERT_EQ(CMN_ERR_NOMEM, rc);
     }
   }
 
-  for (i = 0; i < 4; i++)
-    (void)cmn_computed_destroy(&readers[i]);
-  for (i = 0; i < 5; i++)
-    (void)cmn_computed_destroy(&comps[i]);
-  (void)cmn_signal_destroy(&sig);
+  for (i = 0; i < 4; i++) {
+    ASSERT_EQ(CMN_SUCCESS, cmn_computed_destroy(&readers[i]));
+  }
+  for (i = 0; i < 5; i++) {
+    ASSERT_EQ(CMN_SUCCESS, cmn_computed_destroy(&comps[i]));
+  }
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig));
   PASS();
 }
 
@@ -527,22 +511,23 @@ TEST test_signals_effect_get_oom_real(void) {
   int i;
   cmn_error_e rc;
 
-  (void)cmn_signal_int_create(1, &sig);
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_int_create(1, &sig));
 
   for (i = 0; i < 5; i++) {
     if (i == 4) {
-      (void)cmn_mock_alloc_set(1, 1);
+      ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 1));
     }
     rc = cmn_effect_create(effect_read_sig, sig, &readers[i]);
     if (i == 4) {
-      (void)cmn_mock_alloc_set(0, 0);
+      ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
       ASSERT_EQ(CMN_ERR_NOMEM, rc);
     }
   }
 
-  for (i = 0; i < 4; i++)
-    (void)cmn_effect_destroy(&readers[i]);
-  (void)cmn_signal_destroy(&sig);
+  for (i = 0; i < 4; i++) {
+    ASSERT_EQ(CMN_SUCCESS, cmn_effect_destroy(&readers[i]));
+  }
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig));
   PASS();
 }
 
@@ -551,19 +536,13 @@ TEST test_unregister_middle_node_many(void) {
   cmn_signal_t *sig2 = NULL;
   cmn_signal_t *sig3 = NULL;
 
-  (void)cmn_signal_int_create(1, &sig1);
-  (void)cmn_signal_int_create(2, &sig2);
-  (void)cmn_signal_int_create(3, &sig3);
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_int_create(1, &sig1));
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_int_create(2, &sig2));
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_int_create(3, &sig3));
 
-  /* sig1 is at index 0, sig2 at 1, sig3 at 2.
-     Destroying sig3 will hit true on i=2. i=0, i=1 will be false.
-     Destroying sig1 will hit true on i=0. i=1, i=2 won't happen.
-     Wait, if I destroy sig3, it's at index 2.
-     The loop will check i=0 (sig1, false), i=1 (sig2, false), i=2 (sig3, true).
-  */
-  (void)cmn_signal_destroy(&sig3);
-  (void)cmn_signal_destroy(&sig2);
-  (void)cmn_signal_destroy(&sig1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig3));
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig2));
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig1));
   PASS();
 }
 
@@ -571,16 +550,16 @@ TEST test_unregister_not_found(void) {
   cmn_signal_t *sig1 = NULL;
   cmn_signal_t *dummy = NULL;
 
-  (void)cmn_signal_int_create(1, &sig1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_int_create(1, &sig1));
 
   /* Create a dummy signal manually without registering */
   dummy = calloc(1, 1024); /* arbitrary size since it's opaque */
 
   /* Destroy dummy: it's not in g_all_nodes. Loop will finish without breaking.
    */
-  (void)cmn_signal_destroy(&dummy);
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&dummy));
 
-  (void)cmn_signal_destroy(&sig1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig1));
   PASS();
 }
 
@@ -588,23 +567,23 @@ TEST test_unregister_middle_node(void) {
   cmn_signal_t *sig1 = NULL;
   cmn_signal_t *sig2 = NULL;
 
-  (void)cmn_signal_int_create(1, &sig1);
-  (void)cmn_signal_int_create(2, &sig2);
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_int_create(1, &sig1));
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_int_create(2, &sig2));
 
-  (void)cmn_signal_destroy(&sig2);
-  (void)cmn_signal_destroy(&sig1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig2));
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig1));
   PASS();
 }
 
 static cmn_error_e compute_fail(void *userdata, int *out_val) {
-  (void)userdata;
-  (void)out_val;
+  if (out_val != NULL) {
+    *out_val = (userdata != NULL) ? -1 : 0;
+  }
   return CMN_ERR_IO;
 }
 
 static cmn_error_e effect_fail(void *userdata) {
-  (void)userdata;
-  return CMN_ERR_IO;
+  return (userdata != NULL) ? CMN_ERR_IO : CMN_ERR_INVAL;
 }
 
 TEST test_create_eval_fail(void) {
@@ -612,12 +591,12 @@ TEST test_create_eval_fail(void) {
   cmn_computed_t *comp = NULL;
   cmn_effect_t *eff = NULL;
 
-  (void)cmn_signal_int_create(1, &sig1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_int_create(1, &sig1));
 
   ASSERT_EQ(CMN_ERR_IO, cmn_computed_int_create(compute_fail, sig1, &comp));
   ASSERT_EQ(CMN_ERR_IO, cmn_effect_create(effect_fail, sig1, &eff));
 
-  (void)cmn_signal_destroy(&sig1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig1));
   PASS();
 }
 
@@ -629,20 +608,20 @@ struct stateful_effect {
 static cmn_error_e stateful_effect_fn(void *userdata) {
   struct stateful_effect *ctx = (struct stateful_effect *)userdata;
   int val;
-  (void)cmn_signal_int_get(ctx->sig, &val);
+  cmn_error_e rc = cmn_signal_int_get(ctx->sig, &val);
   if (ctx->should_fail)
     return CMN_ERR_IO;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 static cmn_error_e stateful_compute_fn(void *userdata, int *out_val) {
   struct stateful_effect *ctx = (struct stateful_effect *)userdata;
-  int val;
-  (void)cmn_signal_int_get(ctx->sig, &val);
+  int val = 0;
+  cmn_error_e rc = cmn_signal_int_get(ctx->sig, &val);
   if (ctx->should_fail)
     return CMN_ERR_IO;
   *out_val = val;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 TEST test_propagate_eval_errors(void) {
@@ -650,24 +629,26 @@ TEST test_propagate_eval_errors(void) {
   cmn_effect_t *effect = NULL;
   cmn_computed_t *comp = NULL;
   struct stateful_effect ctx;
+  struct stateful_effect ctx2;
 
-  (void)cmn_signal_int_create(1, &sig);
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_int_create(1, &sig));
   ctx.sig = sig;
   ctx.should_fail = 0;
 
-  (void)cmn_effect_create(stateful_effect_fn, &ctx, &effect);
+  ASSERT_EQ(CMN_SUCCESS, cmn_effect_create(stateful_effect_fn, &ctx, &effect));
   ctx.should_fail = 1;
   ASSERT_EQ(CMN_ERR_IO, cmn_signal_int_set(sig, 2));
 
-  (void)cmn_effect_destroy(&effect);
-  (void)ctx.should_fail;
-  ctx.should_fail = 0;
-  (void)cmn_computed_int_create(stateful_compute_fn, &ctx, &comp);
-  ctx.should_fail = 1;
+  ASSERT_EQ(CMN_SUCCESS, cmn_effect_destroy(&effect));
+  ctx2.sig = sig;
+  ctx2.should_fail = 0;
+  ASSERT_EQ(CMN_SUCCESS,
+            cmn_computed_int_create(stateful_compute_fn, &ctx2, &comp));
+  ctx2.should_fail = 1;
   ASSERT_EQ(CMN_ERR_IO, cmn_signal_int_set(sig, 3));
 
-  (void)cmn_computed_destroy(&comp);
-  (void)cmn_signal_destroy(&sig);
+  ASSERT_EQ(CMN_SUCCESS, cmn_computed_destroy(&comp));
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig));
   PASS();
 }
 
@@ -693,8 +674,8 @@ TEST test_dfs_branches(void) {
   cmn_node_t *n1, *n2;
   cmn_error_e rc;
 
-  (void)cmn_signal_int_create(1, &sig1);
-  (void)cmn_signal_int_create(2, &sig2);
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_int_create(1, &sig1));
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_int_create(2, &sig2));
 
   n1 = (cmn_node_t *)sig1;
   n2 = (cmn_node_t *)sig2;
@@ -717,20 +698,23 @@ TEST test_dfs_branches(void) {
   n1->num_dependents--;
   n2->num_dependents--;
 
-  (void)cmn_signal_destroy(&sig2);
-  (void)cmn_signal_destroy(&sig1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig2));
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig1));
   PASS();
 }
 
 static cmn_error_e compute_dag(void *userdata, int *out_val) {
   cmn_computed_t **comps = (cmn_computed_t **)userdata;
   int v1 = 0, v2 = 0;
-  if (comps[0])
-    (void)cmn_computed_int_get(comps[0], &v1);
-  if (comps[1])
-    (void)cmn_computed_int_get(comps[1], &v2);
+  cmn_error_e rc = CMN_SUCCESS;
+  if (comps[0]) {
+    rc = cmn_computed_int_get(comps[0], &v1);
+  }
+  if (comps[1] && rc == CMN_SUCCESS) {
+    rc = cmn_computed_int_get(comps[1], &v2);
+  }
   *out_val = v1 + v2;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 TEST test_dfs_visited(void) {
@@ -738,20 +722,20 @@ TEST test_dfs_visited(void) {
   cmn_computed_t *c1 = NULL, *c2 = NULL, *c3 = NULL;
   cmn_computed_t *comps[2];
 
-  (void)cmn_signal_int_create(1, &sig);
-  (void)cmn_computed_int_create(compute_double, sig, &c1);
-  (void)cmn_computed_int_create(compute_double, sig, &c2);
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_int_create(1, &sig));
+  ASSERT_EQ(CMN_SUCCESS, cmn_computed_int_create(compute_double, sig, &c1));
+  ASSERT_EQ(CMN_SUCCESS, cmn_computed_int_create(compute_double, sig, &c2));
 
   comps[0] = c1;
   comps[1] = c2;
-  (void)cmn_computed_int_create(compute_dag, comps, &c3);
+  ASSERT_EQ(CMN_SUCCESS, cmn_computed_int_create(compute_dag, comps, &c3));
 
-  (void)cmn_signal_int_set(sig, 2);
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_int_set(sig, 2));
 
-  (void)cmn_computed_destroy(&c3);
-  (void)cmn_computed_destroy(&c2);
-  (void)cmn_computed_destroy(&c1);
-  (void)cmn_signal_destroy(&sig);
+  ASSERT_EQ(CMN_SUCCESS, cmn_computed_destroy(&c3));
+  ASSERT_EQ(CMN_SUCCESS, cmn_computed_destroy(&c2));
+  ASSERT_EQ(CMN_SUCCESS, cmn_computed_destroy(&c1));
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig));
   PASS();
 }
 
@@ -761,16 +745,17 @@ TEST test_signal_int_create_register_oom_all(void) {
   int hit = 0;
   cmn_error_e rc;
   for (i = 0; i < 200; i++) {
-    (void)cmn_mock_alloc_set(1, 1);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 1));
     rc = cmn_signal_int_create(1, &sig[i]);
-    (void)cmn_mock_alloc_set(0, 0);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
     if (rc == CMN_ERR_NOMEM) {
       hit = 1;
       break;
     }
   }
-  for (j = 0; j < i; j++)
-    (void)cmn_signal_destroy(&sig[j]);
+  for (j = 0; j < i; j++) {
+    ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig[j]));
+  }
   ASSERT(hit);
   PASS();
 }
@@ -781,19 +766,20 @@ TEST test_computed_create_register_oom_all(void) {
   int i, j;
   int hit = 0;
   cmn_error_e rc;
-  (void)cmn_signal_int_create(1, &sig);
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_int_create(1, &sig));
   for (i = 0; i < 200; i++) {
-    (void)cmn_mock_alloc_set(1, 1);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 1));
     rc = cmn_computed_int_create(compute_double, sig, &comp[i]);
-    (void)cmn_mock_alloc_set(0, 0);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
     if (rc == CMN_ERR_NOMEM) {
       hit = 1;
       break;
     }
   }
-  for (j = 0; j < i; j++)
-    (void)cmn_computed_destroy(&comp[j]);
-  (void)cmn_signal_destroy(&sig);
+  for (j = 0; j < i; j++) {
+    ASSERT_EQ(CMN_SUCCESS, cmn_computed_destroy(&comp[j]));
+  }
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig));
   ASSERT(hit);
   PASS();
 }
@@ -804,19 +790,20 @@ TEST test_effect_create_register_oom_all(void) {
   int i, j;
   int hit = 0;
   cmn_error_e rc;
-  (void)cmn_signal_int_create(1, &sig);
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_int_create(1, &sig));
   for (i = 0; i < 200; i++) {
-    (void)cmn_mock_alloc_set(1, 1);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 1));
     rc = cmn_effect_create(my_effect, sig, &eff[i]);
-    (void)cmn_mock_alloc_set(0, 0);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
     if (rc == CMN_ERR_NOMEM) {
       hit = 1;
       break;
     }
   }
-  for (j = 0; j < i; j++)
-    (void)cmn_effect_destroy(&eff[j]);
-  (void)cmn_signal_destroy(&sig);
+  for (j = 0; j < i; j++) {
+    ASSERT_EQ(CMN_SUCCESS, cmn_effect_destroy(&eff[j]));
+  }
+  ASSERT_EQ(CMN_SUCCESS, cmn_signal_destroy(&sig));
   ASSERT(hit);
   PASS();
 }
@@ -836,7 +823,7 @@ TEST test_mock_failures(void) {
   /* We need a valid sig to test get/set init fail */
   ASSERT_EQ(CMN_SUCCESS, cmn_signal_int_create(0, &sig));
 
-  (void)cmn_mock_signals_init_fail_set(1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_signals_init_fail_set(1));
   /* Create fails */
   {
     cmn_signal_t *sig2 = NULL;
@@ -850,35 +837,35 @@ TEST test_mock_failures(void) {
 
   ASSERT_EQ(CMN_ERR_IO, cmn_computed_int_create(compute_double, sig, &comp));
   /* To test get/destroy of comp/eff, we need valid ones created while fail=0 */
-  (void)cmn_mock_signals_init_fail_set(0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_signals_init_fail_set(0));
   ASSERT_EQ(CMN_SUCCESS, cmn_computed_int_create(compute_double, sig, &comp));
   ASSERT_EQ(CMN_SUCCESS, cmn_effect_create(my_effect, sig, &eff));
 
-  (void)cmn_mock_signals_init_fail_set(1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_signals_init_fail_set(1));
   ASSERT_EQ(CMN_ERR_IO, cmn_computed_int_get(comp, &val));
   ASSERT_EQ(CMN_ERR_IO, cmn_computed_destroy(&comp));
   ASSERT_EQ(CMN_ERR_IO,
             cmn_effect_create(my_effect, sig, &eff)); /* eff creation fail */
   ASSERT_EQ(CMN_ERR_IO, cmn_effect_destroy(&eff));
-  (void)cmn_mock_signals_init_fail_set(0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_signals_init_fail_set(0));
 
   /* Now test unregister failures */
-  (void)cmn_mock_signals_unregister_fail_set(1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_signals_unregister_fail_set(1));
   ASSERT_EQ(CMN_ERR_IO, cmn_signal_destroy(&sig));
   ASSERT_EQ(CMN_ERR_IO, cmn_computed_destroy(&comp));
   ASSERT_EQ(CMN_ERR_IO, cmn_effect_destroy(&eff));
-  (void)cmn_mock_signals_unregister_fail_set(0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_signals_unregister_fail_set(0));
 
   /* Create unregister fail during rollback of failed eval */
   {
     cmn_computed_t *bad_comp = NULL;
     cmn_effect_t *bad_eff = NULL;
 
-    (void)cmn_mock_signals_unregister_fail_set(1);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_signals_unregister_fail_set(1));
     ASSERT_EQ(CMN_ERR_IO,
               cmn_computed_int_create(compute_fail, sig, &bad_comp));
     ASSERT_EQ(CMN_ERR_IO, cmn_effect_create(effect_fail, sig, &bad_eff));
-    (void)cmn_mock_signals_unregister_fail_set(0);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_signals_unregister_fail_set(0));
   }
 
   ASSERT_EQ(CMN_SUCCESS, cmn_effect_destroy(&eff));

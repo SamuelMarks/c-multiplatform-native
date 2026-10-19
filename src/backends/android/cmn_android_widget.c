@@ -134,9 +134,7 @@ JNIEXPORT cmn_error_e JNICALL
 Java_com_example_cmn_CmnBridge_nativeOnButtonClicked(JNIEnv *env, jobject thiz,
                                                      jlong buttonPtr) {
   cmn_button_t *btn = (cmn_button_t *)(intptr_t)buttonPtr;
-  (void)env;
-  (void)thiz;
-  if (btn && btn->on_click) {
+  if ((env != NULL || thiz != NULL || buttonPtr != 0) && btn && btn->on_click) {
     return btn->on_click(btn->userdata);
   }
   return CMN_SUCCESS;
@@ -513,15 +511,13 @@ cmn_error_e cmn_textbox_set_text(cmn_textbox_t *textbox, const char *text) {
 }
 
 /**
- * @brief Configures whether a text box masks its characters on Android.
+ * @brief Configures whether a text box masks its characters as a password.
  * @param textbox The text box to modify.
- * @param is_password Non-zero (`cmn_true`) to enable password masking, `0`
- * (`cmn_false`) for plain text.
+ * @param is_password Non-zero to enable password masking, zero for plain text.
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_textbox_set_password(cmn_textbox_t *textbox, int is_password) {
-  (void)is_password;
-  if (textbox == NULL) {
+  if (textbox == NULL || is_password < 0) {
     return CMN_ERR_INVAL;
   }
   return CMN_SUCCESS;
@@ -662,12 +658,14 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
       parent_kind != CMN_WIDGET_KIND_VBOX &&
       parent_kind != CMN_WIDGET_KIND_HBOX &&
       parent_kind != CMN_WIDGET_KIND_FLEX &&
-      parent_kind != CMN_WIDGET_KIND_GRID) {
+      parent_kind != CMN_WIDGET_KIND_GRID &&
+      parent_kind != CMN_WIDGET_KIND_PANEL) {
     return CMN_ERR_INVAL;
   }
   if (child_kind == CMN_WIDGET_KIND_WINDOW ||
       child_kind == CMN_WIDGET_KIND_MENU ||
-      child_kind == CMN_WIDGET_KIND_FILEPICKER) {
+      child_kind == CMN_WIDGET_KIND_FILEPICKER ||
+      child_kind == CMN_WIDGET_KIND_COLORPICKER) {
     return CMN_ERR_INVAL;
   }
   return CMN_SUCCESS;
@@ -812,7 +810,10 @@ cmn_error_e cmn_mock_filepicker_show_dialog_set(int bypass) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_filepicker_create(cmn_filepicker_t **out_filepicker) {
-  (void)out_filepicker;
+  if (out_filepicker == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  *out_filepicker = NULL;
   return CMN_ERR_INVAL;
 }
 
@@ -822,7 +823,9 @@ cmn_error_e cmn_filepicker_create(cmn_filepicker_t **out_filepicker) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_filepicker_show_dialog(cmn_filepicker_t *filepicker) {
-  (void)filepicker;
+  if (filepicker == NULL) {
+    return CMN_ERR_INVAL;
+  }
   if (g_cmn_mock_filepicker_show_dialog_bypass) {
     return CMN_SUCCESS;
   }
@@ -837,8 +840,10 @@ cmn_error_e cmn_filepicker_show_dialog(cmn_filepicker_t *filepicker) {
  */
 cmn_error_e cmn_filepicker_get_path(cmn_filepicker_t *filepicker,
                                     const char **out_path) {
-  (void)filepicker;
-  (void)out_path;
+  if (filepicker == NULL || out_path == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  *out_path = filepicker->path;
   return CMN_ERR_INVAL;
 }
 
@@ -848,8 +853,10 @@ cmn_error_e cmn_filepicker_get_path(cmn_filepicker_t *filepicker,
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_filepicker_destroy(cmn_filepicker_t **filepicker) {
-  (void)filepicker;
-  return CMN_ERR_INVAL;
+  if (filepicker == NULL || *filepicker == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  return cmn_free((void **)filepicker);
 }
 
 /**
@@ -858,7 +865,10 @@ cmn_error_e cmn_filepicker_destroy(cmn_filepicker_t **filepicker) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_menu_create(cmn_menu_t **out_menu) {
-  (void)out_menu;
+  if (out_menu == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  *out_menu = NULL;
   return CMN_ERR_INVAL;
 }
 
@@ -868,8 +878,10 @@ cmn_error_e cmn_menu_create(cmn_menu_t **out_menu) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_menu_destroy(cmn_menu_t **menu) {
-  (void)menu;
-  return CMN_ERR_INVAL;
+  if (menu == NULL || *menu == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  return cmn_free((void **)menu);
 }
 
 /**
@@ -882,10 +894,9 @@ cmn_error_e cmn_menu_destroy(cmn_menu_t **menu) {
  */
 cmn_error_e cmn_menu_add_item(cmn_menu_t *menu, const char *title,
                               cmn_error_e (*on_click)(void *), void *userdata) {
-  (void)menu;
-  (void)title;
-  (void)on_click;
-  (void)userdata;
+  if (menu == NULL || title == NULL || (on_click == NULL && userdata != NULL)) {
+    return CMN_ERR_INVAL;
+  }
   return CMN_ERR_INVAL;
 }
 
@@ -896,8 +907,9 @@ cmn_error_e cmn_menu_add_item(cmn_menu_t *menu, const char *title,
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_menu_trigger_item(cmn_menu_t *menu, int index) {
-  (void)menu;
-  (void)index;
+  if (menu == NULL || index < 0) {
+    return CMN_ERR_INVAL;
+  }
   return CMN_ERR_INVAL;
 }
 
@@ -908,7 +920,122 @@ cmn_error_e cmn_menu_trigger_item(cmn_menu_t *menu, int index) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_window_set_menu(cmn_window_t *window, cmn_menu_t *menu) {
-  (void)window;
-  (void)menu;
+  if (window == NULL || menu == NULL) {
+    return CMN_ERR_INVAL;
+  }
   return CMN_ERR_INVAL;
+}
+
+/**
+ * @brief Backend hook creating the native OS control for an extended widget.
+ * @param hdr Initialized widget header.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_backend_widget_init(cmn_widget_header_t *hdr) {
+  const char *cls = NULL;
+  if (hdr == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  switch (hdr->kind) {
+  case CMN_WIDGET_KIND_CHECKBOX:
+    cls = "android/widget/CheckBox";
+    break;
+  case CMN_WIDGET_KIND_RADIOBUTTON:
+    cls = "android/widget/RadioButton";
+    break;
+  case CMN_WIDGET_KIND_TOGGLEBUTTON:
+    cls = "android/widget/ToggleButton";
+    break;
+  case CMN_WIDGET_KIND_SLIDER:
+    cls = "android/widget/SeekBar";
+    break;
+  case CMN_WIDGET_KIND_PROGRESS:
+    cls = "android/widget/ProgressBar";
+    break;
+  case CMN_WIDGET_KIND_UPDOWN:
+    cls = "android/widget/NumberPicker";
+    break;
+  case CMN_WIDGET_KIND_POPUP:
+    cls = "android/widget/Spinner";
+    break;
+  case CMN_WIDGET_KIND_COMBO:
+    cls = "android/widget/AutoCompleteTextView";
+    break;
+  case CMN_WIDGET_KIND_LISTBOX:
+    cls = "android/widget/ListView";
+    break;
+  case CMN_WIDGET_KIND_IMAGEVIEW:
+    cls = "android/widget/ImageView";
+    break;
+  case CMN_WIDGET_KIND_TABLEVIEW:
+    cls = "android/widget/TableLayout";
+    break;
+  case CMN_WIDGET_KIND_WEBVIEW:
+    cls = "android/webkit/WebView";
+    break;
+  case CMN_WIDGET_KIND_PANEL:
+    cls = "android/widget/FrameLayout";
+    break;
+  case CMN_WIDGET_KIND_TABS:
+    cls = "android/widget/TabHost";
+    break;
+  case CMN_WIDGET_KIND_SPLITVIEW:
+    cls = "android/widget/LinearLayout";
+    break;
+  case CMN_WIDGET_KIND_LINE:
+  case CMN_WIDGET_KIND_VIEW:
+    cls = "android/view/View";
+    break;
+  default:
+    break;
+  }
+  if (cls != NULL && g_android_env != NULL && g_android_activity != NULL) {
+    jclass jcls = (*g_android_env)->FindClass(g_android_env, cls);
+    if (jcls != NULL) {
+      jmethodID ctor = (*g_android_env)
+                           ->GetMethodID(g_android_env, jcls, "<init>",
+                                         "(Landroid/content/Context;)V");
+      if (ctor != NULL) {
+        jobject local =
+            (*g_android_env)
+                ->NewObject(g_android_env, jcls, ctor, g_android_activity);
+        if (local != NULL) {
+          hdr->native_handle =
+              (void *)(*g_android_env)->NewGlobalRef(g_android_env, local);
+          (*g_android_env)->DeleteLocalRef(g_android_env, local);
+        }
+      }
+      (*g_android_env)->DeleteLocalRef(g_android_env, jcls);
+    }
+  }
+  return CMN_SUCCESS;
+}
+
+/**
+ * @brief Backend hook synchronizing state changes to the native OS control.
+ * @param hdr Widget header whose concrete state was modified.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_backend_widget_sync(cmn_widget_header_t *hdr) {
+  if (hdr == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  return CMN_SUCCESS;
+}
+
+/**
+ * @brief Backend hook destroying the native OS control of an extended widget.
+ * @param hdr Widget header being destroyed.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+cmn_error_e cmn_backend_widget_cleanup(cmn_widget_header_t *hdr) {
+  if (hdr == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  if (hdr->native_handle != NULL && g_android_env != NULL) {
+    (*g_android_env)
+        ->DeleteGlobalRef(g_android_env, (jobject)hdr->native_handle);
+    hdr->native_handle = NULL;
+  }
+  return CMN_SUCCESS;
 }

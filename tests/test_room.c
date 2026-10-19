@@ -38,8 +38,7 @@ static c_abstract_http_error_t
 mock_http_send_ok(struct HttpTransportContext *ctx,
                   const struct HttpRequest *req, struct HttpResponse **res) {
   int *called = (int *)(void *)ctx;
-  (void)req;
-  if (called != NULL) {
+  if (called != NULL && req != NULL) {
     (*called)++;
   }
   memset(&g_mock_http_res, 0, sizeof(g_mock_http_res));
@@ -58,8 +57,9 @@ mock_http_send_ok(struct HttpTransportContext *ctx,
 static c_abstract_http_error_t
 mock_http_send_500(struct HttpTransportContext *ctx,
                    const struct HttpRequest *req, struct HttpResponse **res) {
-  (void)ctx;
-  (void)req;
+  if (res == NULL || (ctx != NULL && req == NULL)) {
+    return (c_abstract_http_error_t)1;
+  }
   memset(&g_mock_http_res, 0, sizeof(g_mock_http_res));
   g_mock_http_res.status_code = 500;
   *res = &g_mock_http_res;
@@ -76,9 +76,12 @@ mock_http_send_500(struct HttpTransportContext *ctx,
 static c_abstract_http_error_t
 mock_http_send_err(struct HttpTransportContext *ctx,
                    const struct HttpRequest *req, struct HttpResponse **res) {
-  (void)ctx;
-  (void)req;
-  *res = NULL;
+  if (res != NULL) {
+    *res = NULL;
+  }
+  if (ctx != NULL || req == NULL) {
+    return (c_abstract_http_error_t)2;
+  }
   return (c_abstract_http_error_t)1;
 }
 
@@ -219,16 +222,16 @@ TEST test_room_oom(void) {
   c_orm_table_meta_t meta;
   memset(&meta, 0, sizeof(meta));
 
-  (void)cmn_mock_alloc_set(1, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 0));
   ASSERT_EQ(CMN_ERR_NOMEM, cmn_room_db_create(":memory:", &db));
 
-  (void)cmn_mock_alloc_set(0, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
   ASSERT_EQ(CMN_SUCCESS, cmn_room_db_create(":memory:", &db));
 
-  (void)cmn_mock_alloc_set(1, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 0));
   ASSERT_EQ(CMN_ERR_NOMEM, cmn_room_dao_create(db, &meta, &dao));
 
-  (void)cmn_mock_alloc_set(0, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
   ASSERT_EQ(CMN_SUCCESS, cmn_room_db_destroy(&db));
 
   PASS();
@@ -314,8 +317,9 @@ struct cmn_room_db_s {
  * @return C_ORM_ERROR_STEP.
  */
 static c_orm_error_t mock_step_fail(c_orm_query_t *query, int *out_has_row) {
-  (void)query;
-  (void)out_has_row;
+  if (out_has_row != NULL) {
+    *out_has_row = (query == NULL) ? -1 : 0;
+  }
   return C_ORM_ERROR_STEP;
 }
 
@@ -328,8 +332,9 @@ static c_orm_error_t mock_step_fail(c_orm_query_t *query, int *out_has_row) {
  */
 static c_orm_error_t mock_prepare_ok(c_orm_db_t *db, const char *sql,
                                      c_orm_query_t **out_query) {
-  (void)db;
-  (void)sql;
+  if (db == NULL || sql == NULL || out_query == NULL) {
+    return C_ORM_ERROR_MEMORY;
+  }
   *out_query = (c_orm_query_t *)0x1234;
   return C_ORM_OK;
 }
@@ -340,8 +345,7 @@ static c_orm_error_t mock_prepare_ok(c_orm_db_t *db, const char *sql,
  * @return C_ORM_OK.
  */
 static c_orm_error_t mock_finalize_ok(c_orm_query_t *query) {
-  (void)query;
-  return C_ORM_OK;
+  return (query != NULL) ? C_ORM_OK : C_ORM_ERROR_MEMORY;
 }
 
 /**

@@ -2,6 +2,7 @@
 #include "greatest.h"
 #include "screenshot_gen.h"
 #include "cmn/memory.h"
+#include "cmn/string_safe.h"
 #include <stdio.h>
 #include <string.h>
 /* clang-format on */
@@ -17,10 +18,24 @@
  */
 TEST test_screenshot_invalid_args(void) {
   const char *suffix = NULL;
+  const char *name = NULL;
 
   ASSERT_EQ(CMN_ERR_INVAL, cmn_screenshot_get_platform_suffix(NULL));
   ASSERT_EQ(CMN_SUCCESS, cmn_screenshot_get_platform_suffix(&suffix));
   ASSERT_NEQ((const char *)NULL, suffix);
+
+  ASSERT_EQ(CMN_ERR_INVAL, cmn_screenshot_get_scene_name(-1, &name));
+  ASSERT_EQ(CMN_ERR_INVAL,
+            cmn_screenshot_get_scene_name(CMN_SCREENSHOT_SCENE_COUNT, &name));
+  ASSERT_EQ(CMN_ERR_INVAL, cmn_screenshot_get_scene_name(0, NULL));
+  ASSERT_EQ(CMN_SUCCESS, cmn_screenshot_get_scene_name(0, &name));
+  ASSERT_STR_EQ("button", name);
+
+  ASSERT_EQ(CMN_ERR_INVAL, cmn_screenshot_capture_scene(-1, "out.png"));
+  ASSERT_EQ(CMN_ERR_INVAL, cmn_screenshot_capture_scene(
+                               CMN_SCREENSHOT_SCENE_COUNT, "out.png"));
+  ASSERT_EQ(CMN_ERR_INVAL, cmn_screenshot_capture_scene(1, NULL));
+  ASSERT_EQ(CMN_ERR_INVAL, cmn_screenshot_capture_scene(1, ""));
 
   ASSERT_EQ(CMN_ERR_INVAL, cmn_screenshot_capture_buttons_scene(NULL));
   ASSERT_EQ(CMN_ERR_INVAL, cmn_screenshot_capture_buttons_scene(""));
@@ -38,13 +53,14 @@ TEST test_screenshot_invalid_args(void) {
   ASSERT_EQ(CMN_ERR_INVAL, cmn_screenshot_generate_all("", NULL));
 
   ASSERT_EQ(CMN_ERR_INVAL, cmn_screenshot_write_web_html(-1, "out.html"));
-  ASSERT_EQ(CMN_ERR_INVAL, cmn_screenshot_write_web_html(4, "out.html"));
+  ASSERT_EQ(CMN_ERR_INVAL, cmn_screenshot_write_web_html(
+                               CMN_SCREENSHOT_SCENE_COUNT, "out.html"));
   ASSERT_EQ(CMN_ERR_INVAL, cmn_screenshot_write_web_html(0, NULL));
   ASSERT_EQ(CMN_ERR_INVAL, cmn_screenshot_write_web_html(0, ""));
   ASSERT_EQ(CMN_ERR_IO,
             cmn_screenshot_write_web_html(0, "/nonexistent_dir_xyz/out.html"));
   ASSERT_EQ(CMN_SUCCESS, cmn_screenshot_write_web_html(0, "test_web_0.html"));
-  (void)remove("test_web_0.html");
+  ASSERT_EQ(0, remove("test_web_0.html"));
 
   PASS();
 }
@@ -55,18 +71,32 @@ TEST test_screenshot_invalid_args(void) {
  */
 TEST test_screenshot_scenes_and_oom(void) {
   int i;
+  int rm_rc;
+  const char *plat = NULL;
+
+  ASSERT_EQ(CMN_SUCCESS, cmn_screenshot_get_platform_suffix(&plat));
 
   ASSERT_EQ(CMN_SUCCESS,
             cmn_screenshot_generate_all("test_screenshots_tmp", NULL));
   ASSERT_EQ(CMN_SUCCESS,
             cmn_screenshot_generate_all("test_screenshots_tmp", "custom"));
 
+  for (i = 0; i < 6; ++i) {
+    cmn_error_e rc;
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, i));
+    rc = cmn_screenshot_capture_scene(1, "test_screenshots_tmp/scene1_oom.png");
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
+    if (rc == CMN_SUCCESS) {
+      break;
+    }
+  }
+
   for (i = 0; i < 16; ++i) {
     cmn_error_e rc;
-    (void)cmn_mock_alloc_set(1, i);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, i));
     rc = cmn_screenshot_capture_buttons_scene(
         "test_screenshots_tmp/button_oom.png");
-    (void)cmn_mock_alloc_set(0, 0);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
     if (rc == CMN_SUCCESS) {
       break;
     }
@@ -74,10 +104,10 @@ TEST test_screenshot_scenes_and_oom(void) {
 
   for (i = 0; i < 16; ++i) {
     cmn_error_e rc;
-    (void)cmn_mock_alloc_set(1, i);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, i));
     rc = cmn_screenshot_capture_inputs_scene(
         "test_screenshots_tmp/inputs_oom.png");
-    (void)cmn_mock_alloc_set(0, 0);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
     if (rc == CMN_SUCCESS) {
       break;
     }
@@ -85,10 +115,10 @@ TEST test_screenshot_scenes_and_oom(void) {
 
   for (i = 0; i < 16; ++i) {
     cmn_error_e rc;
-    (void)cmn_mock_alloc_set(1, i);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, i));
     rc = cmn_screenshot_capture_hello_world_scene(
         "test_screenshots_tmp/hello_oom.png");
-    (void)cmn_mock_alloc_set(0, 0);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
     if (rc == CMN_SUCCESS) {
       break;
     }
@@ -96,42 +126,40 @@ TEST test_screenshot_scenes_and_oom(void) {
 
   for (i = 0; i < 20; ++i) {
     cmn_error_e rc;
-    (void)cmn_mock_alloc_set(1, i);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, i));
     rc = cmn_screenshot_capture_password_flow_scene(
         "test_screenshots_tmp/pw_oom.png");
-    (void)cmn_mock_alloc_set(0, 0);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
     if (rc == CMN_SUCCESS) {
       break;
     }
   }
 
-  (void)cmn_mock_alloc_set(1, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 0));
   ASSERT_EQ(CMN_ERR_NOMEM,
             cmn_screenshot_generate_all("test_screenshots_tmp", "oom"));
-  (void)cmn_mock_alloc_set(0, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
 
-  (void)remove("test_screenshots_tmp/button_macos.png");
-  (void)remove("test_screenshots_tmp/inputs_macos.png");
-  (void)remove("test_screenshots_tmp/hello_world_macos.png");
-  (void)remove("test_screenshots_tmp/password_flow_macos.png");
-  (void)remove("test_screenshots_tmp/button_windows.png");
-  (void)remove("test_screenshots_tmp/inputs_windows.png");
-  (void)remove("test_screenshots_tmp/hello_world_windows.png");
-  (void)remove("test_screenshots_tmp/password_flow_windows.png");
-  (void)remove("test_screenshots_tmp/button_linux.png");
-  (void)remove("test_screenshots_tmp/inputs_linux.png");
-  (void)remove("test_screenshots_tmp/hello_world_linux.png");
-  (void)remove("test_screenshots_tmp/password_flow_linux.png");
-  (void)remove("test_screenshots_tmp/button_custom.png");
-  (void)remove("test_screenshots_tmp/inputs_custom.png");
-  (void)remove("test_screenshots_tmp/hello_world_custom.png");
-  (void)remove("test_screenshots_tmp/password_flow_custom.png");
-  (void)remove("test_screenshots_tmp/button_oom.png");
-  (void)remove("test_screenshots_tmp/inputs_oom.png");
-  (void)remove("test_screenshots_tmp/hello_world_oom.png");
-  (void)remove("test_screenshots_tmp/password_flow_oom.png");
-  (void)remove("test_screenshots_tmp/hello_oom.png");
-  (void)remove("test_screenshots_tmp/pw_oom.png");
+  for (i = 0; i < CMN_SCREENSHOT_SCENE_COUNT; ++i) {
+    const char *name = NULL;
+    char pbuf[256];
+    ASSERT_EQ(CMN_SUCCESS, cmn_screenshot_get_scene_name(i, &name));
+    ASSERT_EQ(CMN_SUCCESS,
+              cmn_sprintf_s(pbuf, sizeof(pbuf),
+                            "test_screenshots_tmp/%s_%s.png", name, plat));
+    rm_rc = remove(pbuf);
+    ASSERT_EQ(0, rm_rc);
+    ASSERT_EQ(CMN_SUCCESS,
+              cmn_sprintf_s(pbuf, sizeof(pbuf),
+                            "test_screenshots_tmp/%s_custom.png", name));
+    rm_rc = remove(pbuf);
+    ASSERT_EQ(0, rm_rc);
+  }
+  remove("test_screenshots_tmp/scene1_oom.png");
+  remove("test_screenshots_tmp/button_oom.png");
+  remove("test_screenshots_tmp/inputs_oom.png");
+  remove("test_screenshots_tmp/hello_oom.png");
+  remove("test_screenshots_tmp/pw_oom.png");
 
   PASS();
 }

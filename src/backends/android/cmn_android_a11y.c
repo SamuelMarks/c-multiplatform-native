@@ -51,12 +51,12 @@ cmn_error_e cmn_a11y_set_label(void *widget, const char *label) {
  */
 cmn_error_e cmn_a11y_set_tabindex(void *widget, int index) {
   cmn_widget_kind_e kind;
-  (void)index;
   if (widget == NULL) {
     return CMN_ERR_INVAL;
   }
   if (cmn_widget_get_kind(widget, &kind) != CMN_SUCCESS) {
     return CMN_ERR_INVAL;
   }
+  ((cmn_widget_header_t *)widget)->a11y_tabindex = index;
   return CMN_SUCCESS;
 }

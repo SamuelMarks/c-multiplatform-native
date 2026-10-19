@@ -202,14 +202,15 @@ cmn_error_e cmn_router_navigate(cmn_router_t *router, const char *path) {
       rc = cmn_strcpy_s(router->current_path, MAX_PATH_LEN, path);
 
       if (router->current_view != NULL) {
-        rc = (cmn_error_e)((int)rc |
-                           (int)cmn_widget_destroy(
-                               (cmn_widget_t **)&router->current_view));
+        cmn_error_e destroy_rc =
+            cmn_widget_destroy((cmn_widget_t **)&router->current_view);
+        rc = (rc != CMN_SUCCESS) ? rc : destroy_rc;
       }
 
       if (new_view != NULL) {
-        rc = (cmn_error_e)((int)rc | (int)cmn_widget_set_parent(
-                                         router->container, new_view));
+        cmn_error_e parent_rc =
+            cmn_widget_set_parent(router->container, new_view);
+        rc = (rc != CMN_SUCCESS) ? rc : parent_rc;
       }
 
       router->current_view = new_view;

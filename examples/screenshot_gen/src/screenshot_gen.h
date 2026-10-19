@@ -22,6 +22,9 @@ extern "C" {
  * @{
  */
 
+/** @brief Total number of visual widget and application scenes. */
+#define CMN_SCREENSHOT_SCENE_COUNT 24
+
 /**
  * @brief Returns the canonical platform suffix string (`"macos"`, `"windows"`,
  * `"linux"`, or `"web"`) for the current target OS.
@@ -30,6 +33,15 @@ extern "C" {
  */
 CMN_NO_DISCARD cmn_error_e
 cmn_screenshot_get_platform_suffix(const char **out_suffix);
+
+/**
+ * @brief Returns the canonical base name for a given scene index (`0`..`23`).
+ * @param scene_id Scene index (`0`..`CMN_SCREENSHOT_SCENE_COUNT - 1`).
+ * @param out_name Pointer to receive the static scene base name string.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+CMN_NO_DISCARD cmn_error_e cmn_screenshot_get_scene_name(int scene_id,
+                                                         const char **out_name);
 
 /**
  * @brief Builds a real native Buttons showcase window (`cmn_button_t` inside
@@ -72,10 +84,20 @@ CMN_NO_DISCARD cmn_error_e
 cmn_screenshot_capture_password_flow_scene(const char *filepath);
 
 /**
+ * @brief Captures a single visual widget or application scene by index
+ * (`0`..`CMN_SCREENSHOT_SCENE_COUNT - 1`) to `filepath`.
+ * @param scene_id Scene index (`0`..`CMN_SCREENSHOT_SCENE_COUNT - 1`).
+ * @param filepath Destination PNG file path.
+ * @return CMN_SUCCESS on success, error code otherwise.
+ */
+CMN_NO_DISCARD cmn_error_e cmn_screenshot_capture_scene(int scene_id,
+                                                        const char *filepath);
+
+/**
  * @brief Writes the HTML5 DOM document corresponding to a `cmn_web_widget.c`
- * scene (`0`=buttons, `1`=inputs, `2`=hello_world, `3`=password_flow) so a real
- * headless browser can render and screenshot the exact Web DOM widgets.
- * @param scene_id Scene index (`0`..`3`).
+ * scene (`0`..`CMN_SCREENSHOT_SCENE_COUNT - 1`) so a real headless browser can
+ * render and screenshot the exact Web DOM widgets.
+ * @param scene_id Scene index (`0`..`CMN_SCREENSHOT_SCENE_COUNT - 1`).
  * @param html_filepath Destination `.html` file path.
  * @return CMN_SUCCESS on success, error code otherwise.
  */

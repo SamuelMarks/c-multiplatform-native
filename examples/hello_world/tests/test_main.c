@@ -97,9 +97,9 @@ TEST test_app_alloc_failure(void) {
 
   for (i = 0; i < 8; i++) {
     cmn_error_e rc;
-    (void)cmn_mock_alloc_set(1, i);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, i));
     rc = hello_world_app_init(&app);
-    (void)cmn_mock_alloc_set(0, 0);
+    ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
     if (rc == CMN_SUCCESS) {
       ASSERT_EQ(CMN_SUCCESS, hello_world_app_destroy(&app));
       break;

@@ -24,17 +24,16 @@
  */
 static cmn_error_e validator_not_empty(const char *val, void *userdata,
                                        int *out_is_valid, char **out_err_msg) {
-  (void)userdata;
-
   if (val != NULL && strlen(val) > 0) {
     *out_is_valid = 1;
     if (out_err_msg != NULL) {
-      *out_err_msg = NULL;
+      *out_err_msg = (char *)userdata;
     }
   } else {
     *out_is_valid = 0;
     if (out_err_msg != NULL) {
-      *out_err_msg = "Field cannot be empty";
+      *out_err_msg =
+          (userdata != NULL) ? (char *)userdata : "Field cannot be empty";
     }
   }
   return CMN_SUCCESS;
@@ -55,10 +54,12 @@ extern cmn_error_e cmn_mock_textbox_get_text_set(int fail);
  */
 static cmn_error_e validator_error(const char *val, void *userdata,
                                    int *out_is_valid, char **out_err_msg) {
-  (void)val;
-  (void)userdata;
-  (void)out_is_valid;
-  (void)out_err_msg;
+  if (out_is_valid != NULL) {
+    *out_is_valid = (val == NULL && userdata != NULL) ? -1 : 0;
+  }
+  if (out_err_msg != NULL) {
+    *out_err_msg = NULL;
+  }
   return CMN_ERR_IO;
 }
 
@@ -111,10 +112,10 @@ TEST test_form_oom_and_limits(void) {
     ASSERT_EQ(CMN_SUCCESS, cmn_textbox_create(&tbs[i]));
   }
 
-  (void)cmn_mock_alloc_set(1, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 0));
   ASSERT_EQ(CMN_ERR_NOMEM, cmn_form_create(&form1));
   ASSERT_EQ(CMN_ERR_NOMEM, cmn_wizard_create(&wizard));
-  (void)cmn_mock_alloc_set(0, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
 
   ASSERT_EQ(CMN_SUCCESS, cmn_form_create(&form1));
   ASSERT_EQ(CMN_SUCCESS, cmn_wizard_create(&wizard));
@@ -254,9 +255,9 @@ TEST test_form_validate_get_text_error(void) {
   ASSERT_EQ(CMN_SUCCESS,
             cmn_form_add_input(form1, tb1, validator_not_empty, NULL));
 
-  (void)cmn_mock_textbox_get_text_set(1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_textbox_get_text_set(1));
   ASSERT_EQ(CMN_ERR_IO, cmn_form_validate(form1, &is_valid));
-  (void)cmn_mock_textbox_get_text_set(0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_textbox_get_text_set(0));
 
   ASSERT_EQ(CMN_SUCCESS, cmn_form_destroy(&form1));
   ASSERT_EQ(CMN_SUCCESS, cmn_textbox_destroy(&tb1));
@@ -274,10 +275,10 @@ TEST test_form_validate_get_text_error(void) {
 static cmn_error_e validator_always_valid(const char *val, void *userdata,
                                           int *out_is_valid,
                                           char **out_err_msg) {
-  (void)val;
-  (void)userdata;
-  (void)out_err_msg;
-  *out_is_valid = 1;
+  if (out_err_msg != NULL) {
+    *out_err_msg = (char *)userdata;
+  }
+  *out_is_valid = (val != NULL) ? 1 : 2;
   return CMN_SUCCESS;
 }
 

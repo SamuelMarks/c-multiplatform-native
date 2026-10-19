@@ -23,17 +23,17 @@ TEST test_memory_malloc(void) {
   ASSERT_EQ(CMN_ERR_INVAL, cmn_malloc(10, NULL));
   ASSERT_EQ(CMN_SUCCESS, cmn_malloc(0, &ptr));
   ASSERT(ptr == NULL);
-  (void)cmn_mock_alloc_set(1, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 0));
   ASSERT_EQ(CMN_ERR_NOMEM, cmn_malloc(10, &ptr));
   ASSERT(ptr == NULL);
-  (void)cmn_mock_alloc_set(1, 1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 1));
   ASSERT_EQ(CMN_SUCCESS, cmn_malloc(10, &ptr));
   ASSERT(ptr != NULL);
-  (void)cmn_free(&ptr);
-  (void)cmn_mock_alloc_set(0, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_free(&ptr));
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
   ASSERT_EQ(CMN_SUCCESS, cmn_malloc(10, &ptr));
   ASSERT(ptr != NULL);
-  (void)cmn_free(&ptr);
+  ASSERT_EQ(CMN_SUCCESS, cmn_free(&ptr));
   PASS();
 }
 
@@ -49,17 +49,17 @@ TEST test_memory_calloc(void) {
   ASSERT(ptr == NULL);
   ASSERT_EQ(CMN_SUCCESS, cmn_calloc(10, 0, &ptr));
   ASSERT(ptr == NULL);
-  (void)cmn_mock_alloc_set(1, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 0));
   ASSERT_EQ(CMN_ERR_NOMEM, cmn_calloc(10, 10, &ptr));
   ASSERT(ptr == NULL);
-  (void)cmn_mock_alloc_set(1, 1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 1));
   ASSERT_EQ(CMN_SUCCESS, cmn_calloc(10, 10, &ptr));
   ASSERT(ptr != NULL);
-  (void)cmn_free(&ptr);
-  (void)cmn_mock_alloc_set(0, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_free(&ptr));
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
   ASSERT_EQ(CMN_SUCCESS, cmn_calloc(10, 10, &ptr));
   ASSERT(ptr != NULL);
-  (void)cmn_free(&ptr);
+  ASSERT_EQ(CMN_SUCCESS, cmn_free(&ptr));
   PASS();
 }
 
@@ -71,16 +71,16 @@ TEST test_memory_calloc(void) {
 TEST test_memory_realloc(void) {
   void *ptr = NULL;
   void *ptr2 = NULL;
-  (void)cmn_malloc(10, &ptr);
+  ASSERT_EQ(CMN_SUCCESS, cmn_malloc(10, &ptr));
   ASSERT_EQ(CMN_ERR_INVAL, cmn_realloc(ptr, 20, NULL));
-  (void)cmn_mock_alloc_set(1, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 0));
   ASSERT_EQ(CMN_ERR_NOMEM, cmn_realloc(ptr, 20, &ptr2));
   ASSERT(ptr2 == NULL);
-  (void)cmn_mock_alloc_set(1, 1);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(1, 1));
   ASSERT_EQ(CMN_SUCCESS, cmn_realloc(ptr, 20, &ptr2));
   ASSERT(ptr2 != NULL);
   ptr = ptr2;
-  (void)cmn_mock_alloc_set(0, 0);
+  ASSERT_EQ(CMN_SUCCESS, cmn_mock_alloc_set(0, 0));
   ASSERT_EQ(CMN_SUCCESS, cmn_realloc(ptr, 30, &ptr2));
   ASSERT(ptr2 != NULL);
   ptr = ptr2;
@@ -97,7 +97,7 @@ TEST test_memory_free(void) {
   void *ptr = NULL;
   ASSERT_EQ(CMN_ERR_INVAL, cmn_free(NULL));
   ASSERT_EQ(CMN_SUCCESS, cmn_free(&ptr));
-  (void)cmn_malloc(10, &ptr);
+  ASSERT_EQ(CMN_SUCCESS, cmn_malloc(10, &ptr));
   ASSERT_EQ(CMN_SUCCESS, cmn_free(&ptr));
   ASSERT(ptr == NULL);
   PASS();
@@ -130,9 +130,9 @@ TEST test_memory_calloc_oom(void) {
 TEST test_memory_realloc_oom(void) {
   void *ptr = NULL;
   void *ptr2 = (void *)0x1;
-  (void)cmn_malloc(10, &ptr);
+  ASSERT_EQ(CMN_SUCCESS, cmn_malloc(10, &ptr));
   ASSERT_EQ(CMN_ERR_NOMEM, cmn_realloc(ptr, SIZE_MAX, &ptr2));
-  (void)cmn_free(&ptr);
+  ASSERT_EQ(CMN_SUCCESS, cmn_free(&ptr));
   PASS();
 }
 
