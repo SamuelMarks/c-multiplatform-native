@@ -3,7 +3,7 @@ if(WIN32)
         ${CMAKE_CURRENT_SOURCE_DIR}/cmn_win32_app.c
         ${CMAKE_CURRENT_SOURCE_DIR}/cmn_win32_widget.c
     )
-    
+
     target_link_libraries(cmn
         PRIVATE
             user32

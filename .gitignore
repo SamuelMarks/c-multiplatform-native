@@ -107,4 +107,3 @@ __pycache__/
 # Vagrant & Test Artifacts
 .vagrant/
 test_screenshots_tmp/
-

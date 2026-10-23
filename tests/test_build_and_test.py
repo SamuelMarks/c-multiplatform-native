@@ -1,9 +1,5 @@
 import os
-import sys
-import subprocess
-import shutil
-import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 # Ensure we can import the script
 import importlib

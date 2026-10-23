@@ -1,6 +1,6 @@
 add_executable(cmn_tests
-    test_main.c 
-    test_nulls.c 
+    test_main.c
+    test_nulls.c
     test_room.c
     test_error.c
     test_memory.c

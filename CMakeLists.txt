@@ -108,7 +108,7 @@ if(MSVC)
     if(${PROJECT_NAME}_THREADING STREQUAL "Multi-threaded")
         # Multi-threaded is default in MSVC when using CRT
     endif()
-    
+
     # Highest strictness for MSVC
     string(REPLACE "/W3" "" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
     string(REPLACE "/W3" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
