@@ -137,7 +137,7 @@ TEST test_room_basic_crud(void) {
   ASSERT_EQ(42, out_entity.id);
   ASSERT_STR_EQ("John Doe", out_entity.name);
   if (out_entity.name) {
-    free(out_entity.name);
+    ASSERT_EQ(C_ORM_OK, c_orm_system_free(out_entity.name));
   }
 
   /* Finding a non-existent primary key returns CMN_ERR_NOT_FOUND */

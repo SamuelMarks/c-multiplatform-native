@@ -178,7 +178,8 @@ cleanup:
     rc = (rc != CMN_SUCCESS) ? rc : clean_rc;
   }
   if (task_out.title != NULL) {
-    free(task_out.title);
+    c_orm_error_t orm_rc = c_orm_system_free(task_out.title);
+    rc = (orm_rc == C_ORM_OK) ? rc : CMN_ERR_IO;
   }
   {
     cmn_error_e dao_rc = cmn_room_dao_destroy(&dao);

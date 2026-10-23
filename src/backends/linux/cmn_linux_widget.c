@@ -6,6 +6,7 @@
 #include "cmn/string_safe.h"
 #include "cmn/a11y_i18n.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 /* clang-format on */
 
@@ -50,9 +51,13 @@ static cmn_error_e linux_accum_err(cmn_error_e first, cmn_error_e second) {
 static cmn_error_e ensure_gtk_init(void) {
 #ifdef CMN_HAS_GTK3
   if (g_linux_gtk_initialized == 0) {
-    int argc = 0;
-    char **argv = NULL;
-    g_linux_gtk_initialized = gtk_init_check(&argc, &argv) ? 1 : -1;
+    if (getenv("DISPLAY") != NULL || getenv("WAYLAND_DISPLAY") != NULL) {
+      int argc = 0;
+      char **argv = NULL;
+      g_linux_gtk_initialized = gtk_init_check(&argc, &argv) ? 1 : -1;
+    } else {
+      g_linux_gtk_initialized = -1;
+    }
   }
 #else
   g_linux_gtk_initialized = -1;

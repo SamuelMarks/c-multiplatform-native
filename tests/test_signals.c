@@ -1,6 +1,7 @@
 /* clang-format off */
 #include "greatest.h"
 #include "cmn/signals.h"
+#include "cmn/memory.h"
 #include "cmn/error.h"
 /* clang-format on */
 
@@ -553,7 +554,7 @@ TEST test_unregister_not_found(void) {
   ASSERT_EQ(CMN_SUCCESS, cmn_signal_int_create(1, &sig1));
 
   /* Create a dummy signal manually without registering */
-  dummy = calloc(1, 1024); /* arbitrary size since it's opaque */
+  ASSERT_EQ(CMN_SUCCESS, cmn_calloc(1, 1024, (void **)&dummy));
 
   /* Destroy dummy: it's not in g_all_nodes. Loop will finish without breaking.
    */
@@ -682,13 +683,15 @@ TEST test_dfs_branches(void) {
 
   if (n1->num_dependents == n1->cap_dependents) {
     n1->cap_dependents = 4;
-    n1->dependents = malloc(sizeof(cmn_node_t *) * 4);
+    ASSERT_EQ(CMN_SUCCESS,
+              cmn_malloc(sizeof(cmn_node_t *) * 4, (void **)&n1->dependents));
   }
   n1->dependents[n1->num_dependents++] = n2;
 
   if (n2->num_dependents == n2->cap_dependents) {
     n2->cap_dependents = 4;
-    n2->dependents = malloc(sizeof(cmn_node_t *) * 4);
+    ASSERT_EQ(CMN_SUCCESS,
+              cmn_malloc(sizeof(cmn_node_t *) * 4, (void **)&n2->dependents));
   }
   n2->dependents[n2->num_dependents++] = n1;
 

@@ -76,7 +76,8 @@ cmn_error_e cmn_automation_send_key(cmn_window_t *win, cmn_keycode_e key) {
 }
 
 #if !defined(_WIN32) && !defined(__APPLE__) && !defined(__linux__) &&          \
-    !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
+    !defined(__CYGWIN__) && !defined(__unix__) && !defined(__EMSCRIPTEN__) &&  \
+    !defined(__ANDROID__)
 
 /**
  * @brief Captures a screenshot of a window and saves it to a file.

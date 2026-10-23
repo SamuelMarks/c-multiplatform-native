@@ -1964,7 +1964,7 @@ cmn_error_e cmn_menu_add_item(cmn_menu_t *menu, const char *title,
   }
 
   rc = utf8_to_utf16(title, wtitle, 256);
-  AppendMenuW(menu->hmenu, MF_STRING, id, wtitle);
+  AppendMenuW(menu->hmenu, MF_STRING, (UINT_PTR)id, wtitle);
   return rc;
 }
 

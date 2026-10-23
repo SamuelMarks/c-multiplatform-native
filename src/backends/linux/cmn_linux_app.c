@@ -1,6 +1,7 @@
 /* clang-format off */
 #include "cmn/app.h"
 #include "cmn/memory.h"
+#include <stdlib.h>
 #ifdef CMN_HAS_GTK3
 #include <gtk/gtk.h>
 #endif
@@ -42,7 +43,11 @@ cmn_error_e cmn_app_create(cmn_app_t **out_app) {
   }
 
 #ifdef CMN_HAS_GTK3
-  app->has_display = gtk_init_check(&argc, &argv) ? 1 : 0;
+  if (getenv("DISPLAY") != NULL || getenv("WAYLAND_DISPLAY") != NULL) {
+    app->has_display = gtk_init_check(&argc, &argv) ? 1 : 0;
+  } else {
+    app->has_display = 0;
+  }
 #else
   app->has_display = 0;
 #endif

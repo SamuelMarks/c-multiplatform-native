@@ -199,6 +199,7 @@ FetchContent_Declare(
     GIT_TAG        master
 )
 
+include(CTest)
 set(TEMP_BUILD_TESTING ${BUILD_TESTING})
 set(BUILD_TESTING OFF CACHE BOOL "Disable testing for dependencies" FORCE)
 set(C_ORM_BUILD_EXAMPLES OFF CACHE BOOL "Disable examples for c-orm" FORCE)
@@ -220,14 +221,26 @@ set(CMAKE_INTERPROCEDURAL_OPTIMIZATION "${_CMN_SAVED_IPO}")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/bin" "${CMAKE_BINARY_DIR}/lib")
 
 foreach(_dep_tgt cfs c_str_span c89stringutils parson sqlite3 libcurl c-abstract-http c_cdd c-orm c-orm-async c_orm_standalone_fixtures c_orm_legacy_cdd_db)
     if(TARGET ${_dep_tgt})
-        set_target_properties(${_dep_tgt} PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
-            ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
-        )
+        if(WIN32)
+            set_target_properties(${_dep_tgt} PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+                LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+                ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+            )
+        else()
+            get_target_property(_dep_bin_dir ${_dep_tgt} BINARY_DIR)
+            if(_dep_bin_dir)
+                set_target_properties(${_dep_tgt} PROPERTIES
+                    RUNTIME_OUTPUT_DIRECTORY "${_dep_bin_dir}"
+                    LIBRARY_OUTPUT_DIRECTORY "${_dep_bin_dir}"
+                    ARCHIVE_OUTPUT_DIRECTORY "${_dep_bin_dir}"
+                )
+            endif()
+        endif()
         if(MSVC AND DEFINED _CMN_SAVED_MSVC_RUNTIME_LIBRARY AND NOT _CMN_SAVED_MSVC_RUNTIME_LIBRARY STREQUAL "")
             set_target_properties(${_dep_tgt} PROPERTIES
                 MSVC_RUNTIME_LIBRARY "${_CMN_SAVED_MSVC_RUNTIME_LIBRARY}"
