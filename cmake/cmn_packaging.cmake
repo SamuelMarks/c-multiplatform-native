@@ -73,7 +73,9 @@ function(cmn_package_windows_exe TARGET_NAME)
 "1 24 \"app.manifest\"\n"
         )
         target_sources(${TARGET_NAME} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/app.rc")
-        set_target_properties(${TARGET_NAME} PROPERTIES LINK_FLAGS "/MANIFEST:NO")
+        if(MSVC)
+            set_target_properties(${TARGET_NAME} PROPERTIES LINK_FLAGS "/MANIFEST:NO")
+        endif()
 
 
         # CPack configuration
@@ -83,7 +85,7 @@ function(cmn_package_windows_exe TARGET_NAME)
 endfunction()
 
 function(cmn_package_linux_app TARGET_NAME)
-    if(UNIX AND NOT APPLE AND NOT ANDROID)
+    if(UNIX AND NOT APPLE AND NOT ANDROID AND NOT EMSCRIPTEN AND NOT CYGWIN)
         file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/${TARGET_NAME}.desktop"
 "[Desktop Entry]
 Name=${TARGET_NAME}

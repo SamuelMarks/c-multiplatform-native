@@ -1,6 +1,7 @@
 # C Multiplatform Native (cmn)
 
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![CI](https://github.com/SamuelMarks/c-multiplatform-native/actions/workflows/ci.yml/badge.svg)](https://github.com/SamuelMarks/c-multiplatform-native/actions/workflows/ci.yml)
 ![Test Coverage](https://img.shields.io/badge/Test_Coverage-100.0%25-brightgreen) ![Doc Coverage](https://img.shields.io/badge/Doc_Coverage-100.0%25-brightgreen)
 
 `cmn` (C Multiplatform Native) is a lightweight, high-performance, and entirely native GUI framework written in strict C90. It provides a unified API for building cross-platform native graphical user interfaces across desktop, mobile, and web (WASM) without sacrificing platform-specific look and feel or binary size.

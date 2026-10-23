@@ -65,8 +65,6 @@ struct cmn_effect_s {
 static struct AbstractHttpMutex *g_signal_mutex = NULL;
 /** @brief Non-zero once `g_signal_mutex` has been initialized. */
 static int g_signals_initialized = 0;
-/** @brief Last internal mutex or dependency helper status code. */
-static int g_signal_mtx_rc = 0;
 
 /** @brief Currently evaluating computed or effect node tracking dependencies.
  */
@@ -108,6 +106,50 @@ cmn_error_e cmn_mock_signals_unregister_fail_set(int fail) {
 #endif
 
 /**
+ * @brief Combines two error codes, preserving the first failure encountered.
+ * @param first Initial error code.
+ * @param second Subsequent error code.
+ * @return First non-success code, or CMN_SUCCESS.
+ */
+static cmn_error_e signals_accum_err(cmn_error_e first, cmn_error_e second) {
+  return (first != CMN_SUCCESS) ? first : second;
+}
+
+/**
+ * @brief Acquires the global signal graph mutex.
+ * @return CMN_SUCCESS on success, CMN_ERR_IO otherwise.
+ */
+static cmn_error_e signals_lock(void) {
+  return (abstract_http_mutex_lock(g_signal_mutex) == 0) ? CMN_SUCCESS
+                                                         : CMN_ERR_IO;
+}
+
+/**
+ * @brief Releases the global signal graph mutex.
+ * @return CMN_SUCCESS on success, CMN_ERR_IO otherwise.
+ */
+static cmn_error_e signals_unlock(void) {
+  return (abstract_http_mutex_unlock(g_signal_mutex) == 0) ? CMN_SUCCESS
+                                                           : CMN_ERR_IO;
+}
+
+/**
+ * @brief Releases the global signal graph mutex and frees it if no nodes
+ * remain.
+ * @return CMN_SUCCESS on success, CMN_ERR_IO otherwise.
+ */
+static cmn_error_e signals_unlock_after_unregister(void) {
+  cmn_error_e rc = signals_unlock();
+  if (g_num_nodes == 0 && g_signal_mutex != NULL && g_current_tracker == NULL) {
+    int free_rc = abstract_http_mutex_free(g_signal_mutex);
+    g_signal_mutex = NULL;
+    g_signals_initialized = 0;
+    rc = (free_rc == 0) ? rc : CMN_ERR_IO;
+  }
+  return rc;
+}
+
+/**
  * @brief Ensures the global signal mutex is initialized.
  * @return CMN_SUCCESS on success, error code otherwise.
  */
@@ -118,10 +160,10 @@ static cmn_error_e ensure_signals_initialized(void) {
   }
 #endif
   if (!g_signals_initialized) {
-    g_signal_mtx_rc = (int)abstract_http_mutex_init(&g_signal_mutex);
-    g_signals_initialized = 1;
+    int init_rc = abstract_http_mutex_init(&g_signal_mutex);
+    g_signals_initialized = (init_rc == 0) ? 1 : 0;
   }
-  return CMN_SUCCESS;
+  return g_signals_initialized ? CMN_SUCCESS : CMN_ERR_IO;
 }
 
 /**
@@ -178,9 +220,9 @@ static cmn_error_e clear_incoming_dependencies(cmn_node_t *node) {
  */
 static cmn_error_e unregister_node(cmn_node_t *node) {
   size_t i;
-  cmn_error_e rc = CMN_SUCCESS;
+  cmn_error_e rc;
 
-  g_signal_mtx_rc = (int)clear_incoming_dependencies(node);
+  rc = clear_incoming_dependencies(node);
 
   for (i = 0; i < g_num_nodes; i++) {
     if (g_all_nodes[i] == node) {
@@ -189,11 +231,11 @@ static cmn_error_e unregister_node(cmn_node_t *node) {
     }
   }
   if (node->dependents) {
-    rc = cmn_free((void **)&node->dependents);
+    rc = signals_accum_err(rc, cmn_free((void **)&node->dependents));
   }
   if (g_num_nodes == 0 && g_all_nodes != NULL) {
     cmn_error_e free_rc = cmn_free((void **)&g_all_nodes);
-    rc = (rc != CMN_SUCCESS) ? rc : free_rc;
+    rc = signals_accum_err(rc, free_rc);
     g_cap_nodes = 0;
   }
 #ifdef CMN_TESTING
@@ -289,8 +331,9 @@ static cmn_error_e propagate_update(cmn_node_t *start_node) {
   cmn_error_e rc;
   size_t i;
 
-  g_signal_mtx_rc = (int)reset_marks();
-  rc = cmn_calloc(g_num_nodes, sizeof(cmn_node_t *), (void **)&sorted);
+  rc = reset_marks();
+  rc = signals_accum_err(
+      rc, cmn_calloc(g_num_nodes, sizeof(cmn_node_t *), (void **)&sorted));
   if (rc != CMN_SUCCESS) {
     return rc;
   }
@@ -306,44 +349,44 @@ static cmn_error_e propagate_update(cmn_node_t *start_node) {
     if (n->type == NODE_TYPE_COMPUTED) {
       struct cmn_computed_s *comp = (struct cmn_computed_s *)n;
       cmn_node_t *prev_tracker = g_current_tracker;
-      g_signal_mtx_rc = (int)clear_incoming_dependencies(n);
+      rc = signals_accum_err(rc, clear_incoming_dependencies(n));
       g_current_tracker = n;
-      g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
+      rc = signals_accum_err(rc, signals_unlock());
       {
         cmn_error_e eval_rc =
             comp->compute_fn(comp->userdata, &comp->cached_value);
         if (eval_rc != CMN_SUCCESS) {
           cmn_error_e free_rc;
-          g_signal_mtx_rc = (int)abstract_http_mutex_lock(g_signal_mutex);
+          rc = signals_accum_err(eval_rc, signals_lock());
           g_current_tracker = prev_tracker;
           free_rc = cmn_free((void **)&sorted);
-          return (free_rc != CMN_SUCCESS) ? free_rc : eval_rc;
+          return (free_rc != CMN_SUCCESS) ? free_rc : rc;
         }
       }
-      g_signal_mtx_rc = (int)abstract_http_mutex_lock(g_signal_mutex);
+      rc = signals_accum_err(rc, signals_lock());
       g_current_tracker = prev_tracker;
     } else if (n->type == NODE_TYPE_EFFECT) {
       struct cmn_effect_s *eff = (struct cmn_effect_s *)n;
       cmn_node_t *prev_tracker = g_current_tracker;
-      g_signal_mtx_rc = (int)clear_incoming_dependencies(n);
+      rc = signals_accum_err(rc, clear_incoming_dependencies(n));
       g_current_tracker = n;
-      g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
+      rc = signals_accum_err(rc, signals_unlock());
       {
         cmn_error_e eff_rc = eff->effect_fn(eff->userdata);
         if (eff_rc != CMN_SUCCESS) {
           cmn_error_e free_rc;
-          g_signal_mtx_rc = (int)abstract_http_mutex_lock(g_signal_mutex);
+          rc = signals_accum_err(eff_rc, signals_lock());
           g_current_tracker = prev_tracker;
           free_rc = cmn_free((void **)&sorted);
-          return (free_rc != CMN_SUCCESS) ? free_rc : eff_rc;
+          return (free_rc != CMN_SUCCESS) ? free_rc : rc;
         }
       }
-      g_signal_mtx_rc = (int)abstract_http_mutex_lock(g_signal_mutex);
+      rc = signals_accum_err(rc, signals_lock());
       g_current_tracker = prev_tracker;
     }
   }
 
-  return cmn_free((void **)&sorted);
+  return signals_accum_err(rc, cmn_free((void **)&sorted));
 }
 
 /* --- Signal (Writable) --- */
@@ -374,17 +417,17 @@ cmn_error_e cmn_signal_int_create(int initial_val, cmn_signal_t **out_sig) {
   sig->base.type = NODE_TYPE_SIGNAL;
   sig->value = initial_val;
 
-  g_signal_mtx_rc = (int)abstract_http_mutex_lock(g_signal_mutex);
-  rc = register_node((cmn_node_t *)sig);
+  rc = signals_lock();
+  rc = signals_accum_err(rc, register_node((cmn_node_t *)sig));
   if (rc != CMN_SUCCESS) {
     cmn_error_e free_rc = cmn_free((void **)&sig);
-    g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
+    rc = signals_accum_err(rc, signals_unlock());
     return (free_rc != CMN_SUCCESS) ? free_rc : rc;
   }
-  g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
+  rc = signals_unlock();
 
   *out_sig = sig;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -403,19 +446,17 @@ cmn_error_e cmn_signal_int_set(cmn_signal_t *sig, int new_val) {
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  g_signal_mtx_rc = (int)abstract_http_mutex_lock(g_signal_mutex);
+  rc = signals_lock();
 
   if (sig->value != new_val) {
     sig->value = new_val;
-    rc = propagate_update((cmn_node_t *)sig);
+    rc = signals_accum_err(rc, propagate_update((cmn_node_t *)sig));
     if (rc != CMN_SUCCESS) {
-      g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
-      return rc;
+      return signals_accum_err(rc, signals_unlock());
     }
   }
 
-  g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
-  return CMN_SUCCESS;
+  return signals_accum_err(rc, signals_unlock());
 }
 
 /**
@@ -434,19 +475,17 @@ cmn_error_e cmn_signal_int_get(cmn_signal_t *sig, int *out_val) {
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  g_signal_mtx_rc = (int)abstract_http_mutex_lock(g_signal_mutex);
+  rc = signals_lock();
 
   if (g_current_tracker != NULL) {
     cmn_error_e add_rc = add_dependent((cmn_node_t *)sig, g_current_tracker);
     if (add_rc != CMN_SUCCESS) {
-      g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
-      return add_rc;
+      return signals_accum_err(add_rc, signals_unlock());
     }
   }
 
   *out_val = sig->value;
-  g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
-  return CMN_SUCCESS;
+  return signals_accum_err(rc, signals_unlock());
 }
 
 /**
@@ -464,15 +503,14 @@ cmn_error_e cmn_signal_destroy(cmn_signal_t **sig) {
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  g_signal_mtx_rc = (int)abstract_http_mutex_lock(g_signal_mutex);
-  rc = unregister_node((cmn_node_t *)*sig);
+  rc = signals_lock();
+  rc = signals_accum_err(rc, unregister_node((cmn_node_t *)*sig));
   if (rc != CMN_SUCCESS) {
-    g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
-    return rc;
+    return signals_accum_err(rc, signals_unlock());
   }
-  g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
+  rc = signals_unlock_after_unregister();
 
-  return cmn_free((void **)sig);
+  return signals_accum_err(rc, cmn_free((void **)sig));
 }
 
 /* --- Computed (Derived) --- */
@@ -507,26 +545,26 @@ cmn_error_e cmn_computed_int_create(cmn_compute_int_fn compute_fn,
   comp->compute_fn = compute_fn;
   comp->userdata = userdata;
 
-  g_signal_mtx_rc = (int)abstract_http_mutex_lock(g_signal_mutex);
-  rc = register_node((cmn_node_t *)comp);
+  rc = signals_lock();
+  rc = signals_accum_err(rc, register_node((cmn_node_t *)comp));
   if (rc != CMN_SUCCESS) {
     cmn_error_e free_rc = cmn_free((void **)&comp);
-    g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
+    rc = signals_accum_err(rc, signals_unlock());
     return (free_rc != CMN_SUCCESS) ? free_rc : rc;
   }
 
   prev_tracker = g_current_tracker;
   g_current_tracker = (cmn_node_t *)comp;
-  g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
+  rc = signals_accum_err(rc, signals_unlock());
   {
     cmn_error_e eval_rc = comp->compute_fn(comp->userdata, &comp->cached_value);
     if (eval_rc != CMN_SUCCESS) {
       cmn_error_e unreg_rc;
       cmn_error_e free_rc;
-      g_signal_mtx_rc = (int)abstract_http_mutex_lock(g_signal_mutex);
+      rc = signals_accum_err(rc, signals_lock());
       g_current_tracker = prev_tracker;
       unreg_rc = unregister_node((cmn_node_t *)comp);
-      g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
+      rc = signals_accum_err(rc, signals_unlock());
       free_rc = cmn_free((void **)&comp);
       if (unreg_rc != CMN_SUCCESS) {
         return unreg_rc;
@@ -534,13 +572,13 @@ cmn_error_e cmn_computed_int_create(cmn_compute_int_fn compute_fn,
       return (free_rc != CMN_SUCCESS) ? free_rc : eval_rc;
     }
   }
-  g_signal_mtx_rc = (int)abstract_http_mutex_lock(g_signal_mutex);
+  rc = signals_accum_err(rc, signals_lock());
   g_current_tracker = prev_tracker;
 
-  g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
+  rc = signals_accum_err(rc, signals_unlock());
 
   *out_comp = comp;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -559,19 +597,17 @@ cmn_error_e cmn_computed_int_get(cmn_computed_t *comp, int *out_val) {
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  g_signal_mtx_rc = (int)abstract_http_mutex_lock(g_signal_mutex);
+  rc = signals_lock();
 
   if (g_current_tracker != NULL) {
     cmn_error_e add_rc = add_dependent((cmn_node_t *)comp, g_current_tracker);
     if (add_rc != CMN_SUCCESS) {
-      g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
-      return add_rc;
+      return signals_accum_err(add_rc, signals_unlock());
     }
   }
 
   *out_val = comp->cached_value;
-  g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
-  return CMN_SUCCESS;
+  return signals_accum_err(rc, signals_unlock());
 }
 
 /**
@@ -589,15 +625,14 @@ cmn_error_e cmn_computed_destroy(cmn_computed_t **comp) {
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  g_signal_mtx_rc = (int)abstract_http_mutex_lock(g_signal_mutex);
-  rc = unregister_node((cmn_node_t *)*comp);
+  rc = signals_lock();
+  rc = signals_accum_err(rc, unregister_node((cmn_node_t *)*comp));
   if (rc != CMN_SUCCESS) {
-    g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
-    return rc;
+    return signals_accum_err(rc, signals_unlock());
   }
-  g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
+  rc = signals_unlock_after_unregister();
 
-  return cmn_free((void **)comp);
+  return signals_accum_err(rc, cmn_free((void **)comp));
 }
 
 /* --- Effect (Side-effects) --- */
@@ -632,26 +667,26 @@ cmn_error_e cmn_effect_create(cmn_effect_fn effect_fn, void *userdata,
   effect->effect_fn = effect_fn;
   effect->userdata = userdata;
 
-  g_signal_mtx_rc = (int)abstract_http_mutex_lock(g_signal_mutex);
-  rc = register_node((cmn_node_t *)effect);
+  rc = signals_lock();
+  rc = signals_accum_err(rc, register_node((cmn_node_t *)effect));
   if (rc != CMN_SUCCESS) {
     cmn_error_e free_rc = cmn_free((void **)&effect);
-    g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
+    rc = signals_accum_err(rc, signals_unlock());
     return (free_rc != CMN_SUCCESS) ? free_rc : rc;
   }
 
   prev_tracker = g_current_tracker;
   g_current_tracker = (cmn_node_t *)effect;
-  g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
+  rc = signals_accum_err(rc, signals_unlock());
   {
     cmn_error_e init_rc = effect->effect_fn(effect->userdata);
     if (init_rc != CMN_SUCCESS) {
       cmn_error_e unreg_rc;
       cmn_error_e free_rc;
-      g_signal_mtx_rc = (int)abstract_http_mutex_lock(g_signal_mutex);
+      rc = signals_accum_err(rc, signals_lock());
       g_current_tracker = prev_tracker;
       unreg_rc = unregister_node((cmn_node_t *)effect);
-      g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
+      rc = signals_accum_err(rc, signals_unlock());
       free_rc = cmn_free((void **)&effect);
       if (unreg_rc != CMN_SUCCESS) {
         return unreg_rc;
@@ -659,13 +694,13 @@ cmn_error_e cmn_effect_create(cmn_effect_fn effect_fn, void *userdata,
       return (free_rc != CMN_SUCCESS) ? free_rc : init_rc;
     }
   }
-  g_signal_mtx_rc = (int)abstract_http_mutex_lock(g_signal_mutex);
+  rc = signals_accum_err(rc, signals_lock());
   g_current_tracker = prev_tracker;
 
-  g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
+  rc = signals_accum_err(rc, signals_unlock());
 
   *out_effect = effect;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -683,13 +718,12 @@ cmn_error_e cmn_effect_destroy(cmn_effect_t **effect) {
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  g_signal_mtx_rc = (int)abstract_http_mutex_lock(g_signal_mutex);
-  rc = unregister_node((cmn_node_t *)*effect);
+  rc = signals_lock();
+  rc = signals_accum_err(rc, unregister_node((cmn_node_t *)*effect));
   if (rc != CMN_SUCCESS) {
-    g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
-    return rc;
+    return signals_accum_err(rc, signals_unlock());
   }
-  g_signal_mtx_rc = (int)abstract_http_mutex_unlock(g_signal_mutex);
+  rc = signals_unlock_after_unregister();
 
-  return cmn_free((void **)effect);
+  return signals_accum_err(rc, cmn_free((void **)effect));
 }

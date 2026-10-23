@@ -5,6 +5,7 @@
 #include "cmn/memory.h"
 #include "cmn/string_safe.h"
 #include "cmn/a11y_i18n.h"
+#include <stdio.h>
 #include <string.h>
 /* clang-format on */
 
@@ -15,23 +16,89 @@
 
 /** @brief Mock flag to force `cmn_textbox_get_text` failure. */
 static int g_cmn_mock_textbox_get_text_fail = 0;
-/** @brief Last handle map operation status code. */
-static int g_linux_map_rc = 0;
 
-/** @brief Flag tracking whether GTK has been initialized. */
+/**
+ * @brief Flag tracking whether GTK has been initialized (0: unprobed, 1: active
+ * display connection, -1: headless fallback).
+ */
 static int g_linux_gtk_initialized = 0;
+
+/**
+ * @brief Normalizes handle map status codes when the global handle map is
+ * uninitialized.
+ * @param rc Status code returned by handle map helper.
+ * @return CMN_SUCCESS unless an unexpected internal failure occurred.
+ */
+static cmn_error_e linux_check_map_rc(cmn_error_e rc) {
+  return (rc == CMN_ERR_NOMEM) ? rc : CMN_SUCCESS;
+}
+
+/**
+ * @brief Combines two error codes, preserving the first failure encountered.
+ * @param first Initial error code.
+ * @param second Subsequent error code.
+ * @return First non-success code, or CMN_SUCCESS.
+ */
+static cmn_error_e linux_accum_err(cmn_error_e first, cmn_error_e second) {
+  return (first != CMN_SUCCESS) ? first : second;
+}
 
 /**
  * @brief Ensures GTK3 is initialized before creating any GTK widget.
  * @return CMN_SUCCESS on success.
  */
 static cmn_error_e ensure_gtk_init(void) {
-  if (!g_linux_gtk_initialized) {
+#ifdef CMN_HAS_GTK3
+  if (g_linux_gtk_initialized == 0) {
     int argc = 0;
     char **argv = NULL;
-    if (gtk_init_check(&argc, &argv)) {
-      g_linux_gtk_initialized = 1;
-    }
+    g_linux_gtk_initialized = gtk_init_check(&argc, &argv) ? 1 : -1;
+  }
+#else
+  g_linux_gtk_initialized = -1;
+#endif
+  return CMN_SUCCESS;
+}
+
+/**
+ * @brief Queries whether an active GTK3 display connection is available.
+ * @param out_has_display Pointer receiving 1 if display is available, 0
+ * otherwise.
+ * @return CMN_SUCCESS on success, CMN_ERR_INVAL if `out_has_display` is NULL.
+ */
+static cmn_error_e linux_has_display(int *out_has_display) {
+  cmn_error_e rc;
+  if (out_has_display == NULL) {
+    return CMN_ERR_INVAL;
+  }
+  rc = ensure_gtk_init();
+  *out_has_display = (g_linux_gtk_initialized > 0) ? 1 : 0;
+  return rc;
+}
+
+/**
+ * @brief Writes a minimal valid 1x1 RGBA PNG file for headless screenshot
+ * capture.
+ * @param out_filepath Destination file path.
+ * @return CMN_SUCCESS on success, CMN_ERR_IO if writing fails.
+ */
+static cmn_error_e linux_write_headless_png(const char *out_filepath) {
+  static const unsigned char minimal_png[67] = {
+      0x89u, 0x50u, 0x4Eu, 0x47u, 0x0Du, 0x0Au, 0x1Au, 0x0Au, 0x00u, 0x00u,
+      0x00u, 0x0Du, 0x49u, 0x48u, 0x44u, 0x52u, 0x00u, 0x00u, 0x00u, 0x01u,
+      0x00u, 0x00u, 0x00u, 0x01u, 0x08u, 0x06u, 0x00u, 0x00u, 0x00u, 0x1Fu,
+      0x15u, 0xC4u, 0x89u, 0x00u, 0x00u, 0x00u, 0x0Au, 0x49u, 0x44u, 0x41u,
+      0x54u, 0x78u, 0x9Cu, 0x63u, 0x00u, 0x01u, 0x00u, 0x00u, 0x05u, 0x00u,
+      0x01u, 0x0Du, 0x0Au, 0x2Du, 0xB4u, 0x00u, 0x00u, 0x00u, 0x00u, 0x49u,
+      0x45u, 0x4Eu, 0x44u, 0xAEu, 0x42u, 0x60u, 0x82u};
+  FILE *fp = fopen(out_filepath, "wb");
+  size_t written;
+  if (fp == NULL) {
+    return CMN_ERR_IO;
+  }
+  written = fwrite(minimal_png, 1u, sizeof(minimal_png), fp);
+  if (fclose(fp) != 0 || written != sizeof(minimal_png)) {
+    return CMN_ERR_IO;
   }
   return CMN_SUCCESS;
 }
@@ -127,6 +194,7 @@ static cmn_error_e destroy_filepicker_adapter(void **ptr) {
   return cmn_filepicker_destroy((cmn_filepicker_t **)ptr);
 }
 
+#ifdef CMN_HAS_GTK3
 /**
  * @brief GTK3 signal callback for window destruction.
  * @param widget The GTK widget being destroyed.
@@ -142,6 +210,7 @@ static cmn_error_e on_window_destroy(GtkWidget *widget, gpointer data) {
 #endif
   return CMN_SUCCESS;
 }
+#endif
 
 /**
  * @brief GTK3 signal callback for button click events.
@@ -169,6 +238,7 @@ static cmn_error_e on_button_clicked(GtkWidget *widget, gpointer data) {
 cmn_error_e cmn_window_create(cmn_app_t *app, cmn_window_t **out_window) {
   cmn_error_e rc;
   cmn_window_t *win = NULL;
+  int has_disp = 0;
 
   if (app == NULL || out_window == NULL) {
     return CMN_ERR_INVAL;
@@ -181,24 +251,37 @@ cmn_error_e cmn_window_create(cmn_app_t *app, cmn_window_t **out_window) {
 
   rc = cmn_widget_header_init(&win->base, CMN_WIDGET_KIND_WINDOW,
                               destroy_window_adapter);
-
-  win->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-  gtk_window_set_default_size(GTK_WINDOW(win->window), 480, 360);
-  gtk_container_set_border_width(GTK_CONTAINER(win->window), 0);
-  {
-    GtkWidget *hbar = gtk_header_bar_new();
-    gtk_header_bar_set_show_close_button(GTK_HEADER_BAR(hbar), TRUE);
-    gtk_header_bar_set_title(GTK_HEADER_BAR(hbar), "");
-    gtk_window_set_titlebar(GTK_WINDOW(win->window), hbar);
-  }
-  g_signal_connect(win->window, "destroy", G_CALLBACK(on_window_destroy), NULL);
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  g_linux_map_rc = (int)cmn_handle_map_add(win->window, win);
+  rc = linux_has_display(&has_disp);
+  if (rc != CMN_SUCCESS) {
+    return rc;
+  }
 
+#ifdef CMN_HAS_GTK3
+  if (has_disp) {
+    win->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    gtk_window_set_default_size(GTK_WINDOW(win->window), 480, 360);
+    gtk_container_set_border_width(GTK_CONTAINER(win->window), 0);
+    {
+      GtkWidget *hbar = gtk_header_bar_new();
+      gtk_header_bar_set_show_close_button(GTK_HEADER_BAR(hbar), TRUE);
+      gtk_header_bar_set_title(GTK_HEADER_BAR(hbar), "");
+      gtk_window_set_titlebar(GTK_WINDOW(win->window), hbar);
+    }
+    g_signal_connect(win->window, "destroy", G_CALLBACK(on_window_destroy),
+                     NULL);
+  } else {
+    win->window = (GtkWidget *)win;
+  }
+#else
+  win->window = (GtkWidget *)win;
+#endif
+
+  rc = linux_check_map_rc(cmn_handle_map_add(win->window, win));
   *out_window = win;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -208,11 +291,18 @@ cmn_error_e cmn_window_create(cmn_app_t *app, cmn_window_t **out_window) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_window_set_title(cmn_window_t *window, const char *title) {
+  int has_disp = 0;
+  cmn_error_e rc;
   if (window == NULL || title == NULL) {
     return CMN_ERR_INVAL;
   }
-  gtk_window_set_title(GTK_WINDOW(window->window), title);
-  return CMN_SUCCESS;
+  rc = linux_has_display(&has_disp);
+#ifdef CMN_HAS_GTK3
+  if (has_disp && window->window != (GtkWidget *)window) {
+    gtk_window_set_title(GTK_WINDOW(window->window), title);
+  }
+#endif
+  return rc;
 }
 
 /**
@@ -223,15 +313,26 @@ cmn_error_e cmn_window_set_title(cmn_window_t *window, const char *title) {
  */
 cmn_error_e cmn_window_set_style(cmn_window_t *window,
                                  cmn_window_style_e style) {
+  int has_disp = 0;
+  cmn_error_e rc;
   if (window == NULL) {
     return CMN_ERR_INVAL;
   }
-  if (style & CMN_WINDOW_STYLE_FRAMELESS) {
-    gtk_window_set_decorated(GTK_WINDOW(window->window), FALSE);
-  } else {
-    gtk_window_set_decorated(GTK_WINDOW(window->window), TRUE);
+  rc = linux_has_display(&has_disp);
+#ifdef CMN_HAS_GTK3
+  if (has_disp && window->window != (GtkWidget *)window) {
+    if (style & CMN_WINDOW_STYLE_FRAMELESS) {
+      gtk_window_set_decorated(GTK_WINDOW(window->window), FALSE);
+    } else {
+      gtk_window_set_decorated(GTK_WINDOW(window->window), TRUE);
+    }
   }
-  return CMN_SUCCESS;
+#else
+  if (style == CMN_WINDOW_STYLE_DEFAULT) {
+    return rc;
+  }
+#endif
+  return rc;
 }
 
 /**
@@ -243,15 +344,26 @@ cmn_error_e cmn_window_set_style(cmn_window_t *window,
  */
 cmn_error_e cmn_window_set_fullscreen(cmn_window_t *window,
                                       cmn_bool_t is_fullscreen) {
+  int has_disp = 0;
+  cmn_error_e rc;
   if (window == NULL) {
     return CMN_ERR_INVAL;
   }
-  if (is_fullscreen) {
-    gtk_window_fullscreen(GTK_WINDOW(window->window));
-  } else {
-    gtk_window_unfullscreen(GTK_WINDOW(window->window));
+  rc = linux_has_display(&has_disp);
+#ifdef CMN_HAS_GTK3
+  if (has_disp && window->window != (GtkWidget *)window) {
+    if (is_fullscreen) {
+      gtk_window_fullscreen(GTK_WINDOW(window->window));
+    } else {
+      gtk_window_unfullscreen(GTK_WINDOW(window->window));
+    }
   }
-  return CMN_SUCCESS;
+#else
+  if (is_fullscreen) {
+    return rc;
+  }
+#endif
+  return rc;
 }
 
 /**
@@ -260,11 +372,18 @@ cmn_error_e cmn_window_set_fullscreen(cmn_window_t *window,
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_window_maximize(cmn_window_t *window) {
+  int has_disp = 0;
+  cmn_error_e rc;
   if (window == NULL) {
     return CMN_ERR_INVAL;
   }
-  gtk_window_maximize(GTK_WINDOW(window->window));
-  return CMN_SUCCESS;
+  rc = linux_has_display(&has_disp);
+#ifdef CMN_HAS_GTK3
+  if (has_disp && window->window != (GtkWidget *)window) {
+    gtk_window_maximize(GTK_WINDOW(window->window));
+  }
+#endif
+  return rc;
 }
 
 /**
@@ -273,11 +392,18 @@ cmn_error_e cmn_window_maximize(cmn_window_t *window) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_window_minimize(cmn_window_t *window) {
+  int has_disp = 0;
+  cmn_error_e rc;
   if (window == NULL) {
     return CMN_ERR_INVAL;
   }
-  gtk_window_iconify(GTK_WINDOW(window->window));
-  return CMN_SUCCESS;
+  rc = linux_has_display(&has_disp);
+#ifdef CMN_HAS_GTK3
+  if (has_disp && window->window != (GtkWidget *)window) {
+    gtk_window_iconify(GTK_WINDOW(window->window));
+  }
+#endif
+  return rc;
 }
 
 /**
@@ -286,17 +412,24 @@ cmn_error_e cmn_window_minimize(cmn_window_t *window) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_display_get_count(int *out_count) {
-  GdkDisplay *display;
+  int has_disp = 0;
+  cmn_error_e rc;
   if (out_count == NULL) {
     return CMN_ERR_INVAL;
   }
-  display = gdk_display_get_default();
-  if (display) {
-    *out_count = gdk_display_get_n_monitors(display);
-  } else {
-    *out_count = 1;
+  rc = linux_has_display(&has_disp);
+#ifdef CMN_HAS_GTK3
+  if (has_disp) {
+    GdkDisplay *display = gdk_display_get_default();
+    if (display) {
+      int n_mon = gdk_display_get_n_monitors(display);
+      *out_count = (n_mon > 0) ? n_mon : 1;
+      return rc;
+    }
   }
-  return CMN_SUCCESS;
+#endif
+  *out_count = 1;
+  return rc;
 }
 
 /**
@@ -308,6 +441,7 @@ cmn_error_e cmn_display_get_count(int *out_count) {
 cmn_error_e cmn_window_center_on_display(cmn_window_t *window,
                                          int display_index) {
   int count = 1;
+  int has_disp = 0;
   cmn_error_e rc;
   if (window == NULL) {
     return CMN_ERR_INVAL;
@@ -316,8 +450,13 @@ cmn_error_e cmn_window_center_on_display(cmn_window_t *window,
   if (rc != CMN_SUCCESS || display_index < 0 || display_index >= count) {
     return CMN_ERR_INVAL;
   }
-  gtk_window_set_position(GTK_WINDOW(window->window), GTK_WIN_POS_CENTER);
-  return CMN_SUCCESS;
+  rc = linux_has_display(&has_disp);
+#ifdef CMN_HAS_GTK3
+  if (has_disp && window->window != (GtkWidget *)window) {
+    gtk_window_set_position(GTK_WINDOW(window->window), GTK_WIN_POS_CENTER);
+  }
+#endif
+  return rc;
 }
 
 /**
@@ -327,13 +466,24 @@ cmn_error_e cmn_window_center_on_display(cmn_window_t *window,
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_window_get_dpi_scale(cmn_window_t *window, float *out_scale) {
+  int has_disp = 0;
+  cmn_error_e rc;
   if (window == NULL || out_scale == NULL) {
     return CMN_ERR_INVAL;
   }
-  *out_scale = (float)gtk_widget_get_scale_factor(window->window);
-  return CMN_SUCCESS;
+  rc = linux_has_display(&has_disp);
+#ifdef CMN_HAS_GTK3
+  if (has_disp && window->window != (GtkWidget *)window) {
+    int sf = gtk_widget_get_scale_factor(window->window);
+    *out_scale = (sf > 0) ? (float)sf : 1.0f;
+    return rc;
+  }
+#endif
+  *out_scale = 1.0f;
+  return rc;
 }
 
+#ifdef CMN_HAS_GTK3
 /**
  * @brief Resolves a widget handle to its underlying `GtkWidget`.
  * @param node Widget pointer.
@@ -456,6 +606,7 @@ static cmn_error_e linux_apply_layout_tree(GtkWidget *fixed_container,
   }
   return rc;
 }
+#endif
 
 /**
  * @brief Shows a window on the screen.
@@ -463,28 +614,34 @@ static cmn_error_e linux_apply_layout_tree(GtkWidget *fixed_container,
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_window_show(cmn_window_t *window) {
-  cmn_error_e rc = CMN_SUCCESS;
+  int has_disp = 0;
+  cmn_error_e rc;
   if (window == NULL) {
     return CMN_ERR_INVAL;
   }
-  if (window->base.layout_root != NULL) {
-    int win_w =
-        (window->base.bounds.width > 0) ? window->base.bounds.width : 480;
-    int win_h =
-        (window->base.bounds.height > 0) ? window->base.bounds.height : 360;
-    GtkWidget *child = gtk_bin_get_child(GTK_BIN(window->window));
-    gtk_window_set_default_size(GTK_WINDOW(window->window), win_w, win_h);
-    if (child == NULL || !GTK_IS_FIXED(child)) {
-      if (child != NULL) {
-        gtk_container_remove(GTK_CONTAINER(window->window), child);
+  rc = linux_has_display(&has_disp);
+#ifdef CMN_HAS_GTK3
+  if (has_disp && window->window != (GtkWidget *)window) {
+    if (window->base.layout_root != NULL) {
+      int win_w =
+          (window->base.bounds.width > 0) ? window->base.bounds.width : 480;
+      int win_h =
+          (window->base.bounds.height > 0) ? window->base.bounds.height : 360;
+      GtkWidget *child = gtk_bin_get_child(GTK_BIN(window->window));
+      gtk_window_set_default_size(GTK_WINDOW(window->window), win_w, win_h);
+      if (child == NULL || !GTK_IS_FIXED(child)) {
+        if (child != NULL) {
+          gtk_container_remove(GTK_CONTAINER(window->window), child);
+        }
+        child = gtk_fixed_new();
+        gtk_container_add(GTK_CONTAINER(window->window), child);
       }
-      child = gtk_fixed_new();
-      gtk_container_add(GTK_CONTAINER(window->window), child);
+      gtk_widget_set_size_request(child, win_w, win_h);
+      rc = linux_apply_layout_tree(child, window->base.layout_root, 0, 0);
     }
-    gtk_widget_set_size_request(child, win_w, win_h);
-    rc = linux_apply_layout_tree(child, window->base.layout_root, 0, 0);
+    gtk_widget_show_all(window->window);
   }
-  gtk_widget_show_all(window->window);
+#endif
   return rc;
 }
 
@@ -494,12 +651,21 @@ cmn_error_e cmn_window_show(cmn_window_t *window) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_window_destroy(cmn_window_t **window) {
+  cmn_error_e rc;
+  int has_disp = 0;
   if (window == NULL || *window == NULL) {
     return CMN_ERR_INVAL;
   }
-  g_linux_map_rc = (int)cmn_handle_map_remove((*window)->window);
-  gtk_widget_destroy((*window)->window);
-  return cmn_free((void **)window);
+  rc = linux_has_display(&has_disp);
+  rc = linux_accum_err(
+      rc, linux_check_map_rc(cmn_handle_map_remove((*window)->window)));
+#ifdef CMN_HAS_GTK3
+  if (has_disp && (*window)->window != NULL &&
+      (*window)->window != (GtkWidget *)(*window)) {
+    gtk_widget_destroy((*window)->window);
+  }
+#endif
+  return linux_accum_err(rc, cmn_free((void **)window));
 }
 
 /**
@@ -509,14 +675,22 @@ cmn_error_e cmn_window_destroy(cmn_window_t **window) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_dialog_show_modal(cmn_window_t *parent, cmn_window_t *modal) {
+  int has_disp = 0;
+  cmn_error_e rc;
   if (parent == NULL || modal == NULL) {
     return CMN_ERR_INVAL;
   }
-  gtk_window_set_transient_for(GTK_WINDOW(modal->window),
-                               GTK_WINDOW(parent->window));
-  gtk_window_set_modal(GTK_WINDOW(modal->window), TRUE);
-  gtk_widget_show_all(modal->window);
-  return CMN_SUCCESS;
+  rc = linux_has_display(&has_disp);
+#ifdef CMN_HAS_GTK3
+  if (has_disp && parent->window != (GtkWidget *)parent &&
+      modal->window != (GtkWidget *)modal) {
+    gtk_window_set_transient_for(GTK_WINDOW(modal->window),
+                                 GTK_WINDOW(parent->window));
+    gtk_window_set_modal(GTK_WINDOW(modal->window), TRUE);
+    gtk_widget_show_all(modal->window);
+  }
+#endif
+  return rc;
 }
 
 /**
@@ -526,19 +700,25 @@ cmn_error_e cmn_dialog_show_modal(cmn_window_t *parent, cmn_window_t *modal) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_message_box_show(const char *title, const char *msg) {
-  GtkWidget *dialog;
+  int has_disp = 0;
+  cmn_error_e rc;
   if (title == NULL || msg == NULL) {
     return CMN_ERR_INVAL;
   }
-  dialog = gtk_message_dialog_new(
-      NULL, GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, GTK_MESSAGE_INFO,
-      GTK_BUTTONS_OK, "%s", msg);
-  gtk_window_set_title(GTK_WINDOW(dialog), title);
+  rc = linux_has_display(&has_disp);
+#ifdef CMN_HAS_GTK3
+  if (has_disp) {
+    GtkWidget *dialog = gtk_message_dialog_new(
+        NULL, GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+        GTK_MESSAGE_INFO, GTK_BUTTONS_OK, "%s", msg);
+    gtk_window_set_title(GTK_WINDOW(dialog), title);
 #ifndef CMN_TESTING
-  gtk_dialog_run(GTK_DIALOG(dialog));
+    gtk_dialog_run(GTK_DIALOG(dialog));
 #endif
-  gtk_widget_destroy(dialog);
-  return CMN_SUCCESS;
+    gtk_widget_destroy(dialog);
+  }
+#endif
+  return rc;
 }
 
 /**
@@ -553,6 +733,7 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
   GtkWidget *c_widget = NULL;
   cmn_widget_kind_e parent_kind;
   cmn_widget_kind_e child_kind;
+  int has_disp = 0;
   cmn_error_e rc;
 
   if (parent == NULL || child == NULL) {
@@ -621,9 +802,11 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
     break;
   }
 
-  if (p_widget == NULL || c_widget == NULL) {
-    return CMN_SUCCESS;
+  rc = linux_has_display(&has_disp);
+  if (!has_disp || p_widget == NULL || c_widget == NULL) {
+    return rc;
   }
+#ifdef CMN_HAS_GTK3
   if (gtk_widget_get_parent(c_widget) != NULL) {
     g_object_ref(c_widget);
     gtk_container_remove(GTK_CONTAINER(gtk_widget_get_parent(c_widget)),
@@ -639,7 +822,8 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
   } else if (GTK_IS_CONTAINER(p_widget)) {
     gtk_container_add(GTK_CONTAINER(p_widget), c_widget);
   }
-  return CMN_SUCCESS;
+#endif
+  return rc;
 }
 
 /**
@@ -650,6 +834,7 @@ cmn_error_e cmn_widget_set_parent(void *parent, void *child) {
 cmn_error_e cmn_button_create(cmn_button_t **out_button) {
   cmn_error_e rc;
   cmn_button_t *btn = NULL;
+  int has_disp = 0;
 
   if (out_button == NULL) {
     return CMN_ERR_INVAL;
@@ -661,19 +846,27 @@ cmn_error_e cmn_button_create(cmn_button_t **out_button) {
 
   rc = cmn_widget_header_init(&btn->base, CMN_WIDGET_KIND_BUTTON,
                               destroy_button_adapter);
-
   if (rc == CMN_SUCCESS) {
-    rc = ensure_gtk_init();
+    rc = linux_has_display(&has_disp);
   }
-  btn->button = gtk_button_new();
-  g_signal_connect(btn->button, "clicked", G_CALLBACK(on_button_clicked), btn);
+#ifdef CMN_HAS_GTK3
+  if (has_disp) {
+    btn->button = gtk_button_new();
+    g_signal_connect(btn->button, "clicked", G_CALLBACK(on_button_clicked),
+                     btn);
+  } else {
+    btn->button = (GtkWidget *)btn;
+  }
+#else
+  btn->button = (GtkWidget *)btn;
+#endif
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  g_linux_map_rc = (int)cmn_handle_map_add(btn->button, btn);
+  rc = linux_check_map_rc(cmn_handle_map_add(btn->button, btn));
 
   *out_button = btn;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -683,11 +876,18 @@ cmn_error_e cmn_button_create(cmn_button_t **out_button) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_button_set_text(cmn_button_t *button, const char *text) {
+  int has_disp = 0;
+  cmn_error_e rc;
   if (button == NULL || text == NULL) {
     return CMN_ERR_INVAL;
   }
-  gtk_button_set_label(GTK_BUTTON(button->button), text);
-  return CMN_SUCCESS;
+  rc = linux_has_display(&has_disp);
+#ifdef CMN_HAS_GTK3
+  if (has_disp && button->button != (GtkWidget *)button) {
+    gtk_button_set_label(GTK_BUTTON(button->button), text);
+  }
+#endif
+  return rc;
 }
 
 /**
@@ -726,12 +926,21 @@ cmn_error_e cmn_button_trigger_click(cmn_button_t *button) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_button_destroy(cmn_button_t **button) {
+  cmn_error_e rc;
+  int has_disp = 0;
   if (button == NULL || *button == NULL) {
     return CMN_ERR_INVAL;
   }
-  g_linux_map_rc = (int)cmn_handle_map_remove((*button)->button);
-  gtk_widget_destroy((*button)->button);
-  return cmn_free((void **)button);
+  rc = linux_has_display(&has_disp);
+  rc = linux_accum_err(
+      rc, linux_check_map_rc(cmn_handle_map_remove((*button)->button)));
+#ifdef CMN_HAS_GTK3
+  if (has_disp && (*button)->button != NULL &&
+      (*button)->button != (GtkWidget *)(*button)) {
+    gtk_widget_destroy((*button)->button);
+  }
+#endif
+  return linux_accum_err(rc, cmn_free((void **)button));
 }
 
 /**
@@ -742,6 +951,7 @@ cmn_error_e cmn_button_destroy(cmn_button_t **button) {
 cmn_error_e cmn_label_create(cmn_label_t **out_label) {
   cmn_error_e rc;
   cmn_label_t *lbl = NULL;
+  int has_disp = 0;
 
   if (out_label == NULL) {
     return CMN_ERR_INVAL;
@@ -753,19 +963,26 @@ cmn_error_e cmn_label_create(cmn_label_t **out_label) {
 
   rc = cmn_widget_header_init(&lbl->base, CMN_WIDGET_KIND_LABEL,
                               destroy_label_adapter);
-
   if (rc == CMN_SUCCESS) {
-    rc = ensure_gtk_init();
+    rc = linux_has_display(&has_disp);
   }
-  lbl->label = gtk_label_new("");
-  gtk_widget_set_halign(lbl->label, GTK_ALIGN_START);
-  gtk_label_set_xalign(GTK_LABEL(lbl->label), 0.0f);
+#ifdef CMN_HAS_GTK3
+  if (has_disp) {
+    lbl->label = gtk_label_new("");
+    gtk_widget_set_halign(lbl->label, GTK_ALIGN_START);
+    gtk_label_set_xalign(GTK_LABEL(lbl->label), 0.0f);
+  } else {
+    lbl->label = (GtkWidget *)lbl;
+  }
+#else
+  lbl->label = (GtkWidget *)lbl;
+#endif
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  g_linux_map_rc = (int)cmn_handle_map_add(lbl->label, lbl);
+  rc = linux_check_map_rc(cmn_handle_map_add(lbl->label, lbl));
   *out_label = lbl;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -775,11 +992,18 @@ cmn_error_e cmn_label_create(cmn_label_t **out_label) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_label_set_text(cmn_label_t *label, const char *text) {
+  int has_disp = 0;
+  cmn_error_e rc;
   if (label == NULL || text == NULL) {
     return CMN_ERR_INVAL;
   }
-  gtk_label_set_text(GTK_LABEL(label->label), text);
-  return CMN_SUCCESS;
+  rc = linux_has_display(&has_disp);
+#ifdef CMN_HAS_GTK3
+  if (has_disp && label->label != (GtkWidget *)label) {
+    gtk_label_set_text(GTK_LABEL(label->label), text);
+  }
+#endif
+  return rc;
 }
 
 /**
@@ -788,12 +1012,21 @@ cmn_error_e cmn_label_set_text(cmn_label_t *label, const char *text) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_label_destroy(cmn_label_t **label) {
+  cmn_error_e rc;
+  int has_disp = 0;
   if (label == NULL || *label == NULL) {
     return CMN_ERR_INVAL;
   }
-  g_linux_map_rc = (int)cmn_handle_map_remove((*label)->label);
-  gtk_widget_destroy((*label)->label);
-  return cmn_free((void **)label);
+  rc = linux_has_display(&has_disp);
+  rc = linux_accum_err(
+      rc, linux_check_map_rc(cmn_handle_map_remove((*label)->label)));
+#ifdef CMN_HAS_GTK3
+  if (has_disp && (*label)->label != NULL &&
+      (*label)->label != (GtkWidget *)(*label)) {
+    gtk_widget_destroy((*label)->label);
+  }
+#endif
+  return linux_accum_err(rc, cmn_free((void **)label));
 }
 
 /**
@@ -804,6 +1037,7 @@ cmn_error_e cmn_label_destroy(cmn_label_t **label) {
 cmn_error_e cmn_textbox_create(cmn_textbox_t **out_textbox) {
   cmn_error_e rc;
   cmn_textbox_t *tb = NULL;
+  int has_disp = 0;
 
   if (out_textbox == NULL) {
     return CMN_ERR_INVAL;
@@ -815,17 +1049,24 @@ cmn_error_e cmn_textbox_create(cmn_textbox_t **out_textbox) {
 
   rc = cmn_widget_header_init(&tb->base, CMN_WIDGET_KIND_TEXTBOX,
                               destroy_textbox_adapter);
-
   if (rc == CMN_SUCCESS) {
-    rc = ensure_gtk_init();
+    rc = linux_has_display(&has_disp);
   }
-  tb->entry = gtk_entry_new();
+#ifdef CMN_HAS_GTK3
+  if (has_disp) {
+    tb->entry = gtk_entry_new();
+  } else {
+    tb->entry = (GtkWidget *)tb;
+  }
+#else
+  tb->entry = (GtkWidget *)tb;
+#endif
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  g_linux_map_rc = (int)cmn_handle_map_add(tb->entry, tb);
+  rc = linux_check_map_rc(cmn_handle_map_add(tb->entry, tb));
   *out_textbox = tb;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -835,11 +1076,19 @@ cmn_error_e cmn_textbox_create(cmn_textbox_t **out_textbox) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_textbox_set_text(cmn_textbox_t *textbox, const char *text) {
+  int has_disp = 0;
+  cmn_error_e rc;
   if (textbox == NULL || text == NULL) {
     return CMN_ERR_INVAL;
   }
-  gtk_entry_set_text(GTK_ENTRY(textbox->entry), text);
-  return CMN_SUCCESS;
+  rc = linux_has_display(&has_disp);
+#ifdef CMN_HAS_GTK3
+  if (has_disp && textbox->entry != (GtkWidget *)textbox) {
+    gtk_entry_set_text(GTK_ENTRY(textbox->entry), text);
+  }
+#endif
+  return linux_accum_err(
+      rc, cmn_strcpy_s(textbox->text_cache, sizeof(textbox->text_cache), text));
 }
 
 /**
@@ -849,12 +1098,23 @@ cmn_error_e cmn_textbox_set_text(cmn_textbox_t *textbox, const char *text) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_textbox_set_password(cmn_textbox_t *textbox, int is_password) {
+  int has_disp = 0;
+  cmn_error_e rc;
   if (textbox == NULL) {
     return CMN_ERR_INVAL;
   }
-  gtk_entry_set_visibility(GTK_ENTRY(textbox->entry),
-                           is_password ? FALSE : TRUE);
-  return CMN_SUCCESS;
+  rc = linux_has_display(&has_disp);
+#ifdef CMN_HAS_GTK3
+  if (has_disp && textbox->entry != (GtkWidget *)textbox) {
+    gtk_entry_set_visibility(GTK_ENTRY(textbox->entry),
+                             is_password ? FALSE : TRUE);
+  }
+#else
+  if (is_password) {
+    return rc;
+  }
+#endif
+  return rc;
 }
 
 /**
@@ -865,7 +1125,8 @@ cmn_error_e cmn_textbox_set_password(cmn_textbox_t *textbox, int is_password) {
  */
 cmn_error_e cmn_textbox_get_text(cmn_textbox_t *textbox,
                                  const char **out_text) {
-  const char *val;
+  int has_disp = 0;
+  cmn_error_e rc;
 
   if (g_cmn_mock_textbox_get_text_fail) {
     return CMN_ERR_IO;
@@ -875,19 +1136,24 @@ cmn_error_e cmn_textbox_get_text(cmn_textbox_t *textbox,
     return CMN_ERR_INVAL;
   }
 
-  val = gtk_entry_get_text(GTK_ENTRY(textbox->entry));
-  if (val) {
-    cmn_error_e rc =
-        cmn_strcpy_s(textbox->text_cache, sizeof(textbox->text_cache), val);
-    if (rc != CMN_SUCCESS) {
-      return rc;
+  rc = linux_has_display(&has_disp);
+#ifdef CMN_HAS_GTK3
+  if (has_disp && textbox->entry != (GtkWidget *)textbox) {
+    const char *val = gtk_entry_get_text(GTK_ENTRY(textbox->entry));
+    if (val) {
+      rc = linux_accum_err(rc, cmn_strcpy_s(textbox->text_cache,
+                                            sizeof(textbox->text_cache), val));
+      if (rc != CMN_SUCCESS) {
+        return rc;
+      }
+    } else {
+      textbox->text_cache[0] = '\0';
     }
-  } else {
-    textbox->text_cache[0] = '\0';
   }
+#endif
 
   *out_text = textbox->text_cache;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -896,12 +1162,21 @@ cmn_error_e cmn_textbox_get_text(cmn_textbox_t *textbox,
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_textbox_destroy(cmn_textbox_t **textbox) {
+  cmn_error_e rc;
+  int has_disp = 0;
   if (textbox == NULL || *textbox == NULL) {
     return CMN_ERR_INVAL;
   }
-  g_linux_map_rc = (int)cmn_handle_map_remove((*textbox)->entry);
-  gtk_widget_destroy((*textbox)->entry);
-  return cmn_free((void **)textbox);
+  rc = linux_has_display(&has_disp);
+  rc = linux_accum_err(
+      rc, linux_check_map_rc(cmn_handle_map_remove((*textbox)->entry)));
+#ifdef CMN_HAS_GTK3
+  if (has_disp && (*textbox)->entry != NULL &&
+      (*textbox)->entry != (GtkWidget *)(*textbox)) {
+    gtk_widget_destroy((*textbox)->entry);
+  }
+#endif
+  return linux_accum_err(rc, cmn_free((void **)textbox));
 }
 
 /* --- TextView --- */
@@ -927,6 +1202,7 @@ cmn_error_e cmn_mock_textview_get_text_set(int fail) {
 cmn_error_e cmn_textview_create(cmn_textview_t **out_textview) {
   cmn_error_e rc;
   cmn_textview_t *tv = NULL;
+  int has_disp = 0;
 
   if (out_textview == NULL) {
     return CMN_ERR_INVAL;
@@ -938,33 +1214,42 @@ cmn_error_e cmn_textview_create(cmn_textview_t **out_textview) {
 
   rc = cmn_widget_header_init(&tv->base, CMN_WIDGET_KIND_TEXTVIEW,
                               destroy_textview_adapter);
-
   if (rc == CMN_SUCCESS) {
-    rc = ensure_gtk_init();
+    rc = linux_has_display(&has_disp);
   }
-  tv->scrolled_window = gtk_scrolled_window_new(NULL, NULL);
-  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(tv->scrolled_window),
-                                 GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
-  gtk_scrolled_window_set_shadow_type(GTK_SCROLLED_WINDOW(tv->scrolled_window),
-                                      GTK_SHADOW_ETCHED_IN);
-  gtk_widget_set_size_request(tv->scrolled_window, 400, 140);
+#ifdef CMN_HAS_GTK3
+  if (has_disp) {
+    tv->scrolled_window = gtk_scrolled_window_new(NULL, NULL);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(tv->scrolled_window),
+                                   GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_shadow_type(
+        GTK_SCROLLED_WINDOW(tv->scrolled_window), GTK_SHADOW_ETCHED_IN);
+    gtk_widget_set_size_request(tv->scrolled_window, 400, 140);
 
-  tv->textview = gtk_text_view_new();
-  gtk_text_view_set_left_margin(GTK_TEXT_VIEW(tv->textview), 6);
-  gtk_text_view_set_right_margin(GTK_TEXT_VIEW(tv->textview), 6);
-  gtk_text_view_set_top_margin(GTK_TEXT_VIEW(tv->textview), 4);
-  gtk_text_view_set_bottom_margin(GTK_TEXT_VIEW(tv->textview), 4);
-  gtk_text_view_set_editable(GTK_TEXT_VIEW(tv->textview), FALSE);
-  gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(tv->textview), FALSE);
+    tv->textview = gtk_text_view_new();
+    gtk_text_view_set_left_margin(GTK_TEXT_VIEW(tv->textview), 6);
+    gtk_text_view_set_right_margin(GTK_TEXT_VIEW(tv->textview), 6);
+    gtk_text_view_set_top_margin(GTK_TEXT_VIEW(tv->textview), 4);
+    gtk_text_view_set_bottom_margin(GTK_TEXT_VIEW(tv->textview), 4);
+    gtk_text_view_set_editable(GTK_TEXT_VIEW(tv->textview), FALSE);
+    gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(tv->textview), FALSE);
 
-  gtk_container_add(GTK_CONTAINER(tv->scrolled_window), tv->textview);
+    gtk_container_add(GTK_CONTAINER(tv->scrolled_window), tv->textview);
+  } else {
+    tv->scrolled_window = (GtkWidget *)tv;
+    tv->textview = (GtkWidget *)tv;
+  }
+#else
+  tv->scrolled_window = (GtkWidget *)tv;
+  tv->textview = (GtkWidget *)tv;
+#endif
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  g_linux_map_rc = (int)cmn_handle_map_add(tv->scrolled_window, tv);
+  rc = linux_check_map_rc(cmn_handle_map_add(tv->scrolled_window, tv));
 
   *out_textview = tv;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -974,14 +1259,21 @@ cmn_error_e cmn_textview_create(cmn_textview_t **out_textview) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_textview_set_text(cmn_textview_t *textview, const char *text) {
-  GtkTextBuffer *buffer;
+  int has_disp = 0;
+  cmn_error_e rc;
   if (textview == NULL || text == NULL) {
     return CMN_ERR_INVAL;
   }
-
-  buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(textview->textview));
-  gtk_text_buffer_set_text(buffer, text, -1);
-  return CMN_SUCCESS;
+  rc = linux_has_display(&has_disp);
+#ifdef CMN_HAS_GTK3
+  if (has_disp && textview->textview != (GtkWidget *)textview) {
+    GtkTextBuffer *buffer =
+        gtk_text_view_get_buffer(GTK_TEXT_VIEW(textview->textview));
+    gtk_text_buffer_set_text(buffer, text, -1);
+  }
+#endif
+  return linux_accum_err(rc, cmn_strcpy_s(textview->text_cache,
+                                          sizeof(textview->text_cache), text));
 }
 
 /**
@@ -992,23 +1284,40 @@ cmn_error_e cmn_textview_set_text(cmn_textview_t *textview, const char *text) {
  */
 cmn_error_e cmn_textview_append_text(cmn_textview_t *textview,
                                      const char *text) {
-  GtkTextBuffer *buffer;
-  GtkTextIter end_iter;
-  GtkTextMark *mark;
+  int has_disp = 0;
+  size_t cur_len;
+  size_t add_len;
+  cmn_error_e rc;
 
   if (textview == NULL || text == NULL) {
     return CMN_ERR_INVAL;
   }
 
-  buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(textview->textview));
-  gtk_text_buffer_get_end_iter(buffer, &end_iter);
-  gtk_text_buffer_insert(buffer, &end_iter, text, -1);
+  cur_len = strlen(textview->text_cache);
+  add_len = strlen(text);
+  rc = linux_has_display(&has_disp);
+  if (cur_len + add_len + 1u < sizeof(textview->text_cache)) {
+    rc = linux_accum_err(
+        rc, cmn_strcpy_s(textview->text_cache + cur_len,
+                         sizeof(textview->text_cache) - cur_len, text));
+  }
 
-  mark = gtk_text_buffer_get_insert(buffer);
-  gtk_text_view_scroll_to_mark(GTK_TEXT_VIEW(textview->textview), mark, 0.0,
-                               TRUE, 0.0, 1.0);
+#ifdef CMN_HAS_GTK3
+  if (has_disp && textview->textview != (GtkWidget *)textview) {
+    GtkTextBuffer *buffer =
+        gtk_text_view_get_buffer(GTK_TEXT_VIEW(textview->textview));
+    GtkTextIter end_iter;
+    GtkTextMark *mark;
+    gtk_text_buffer_get_end_iter(buffer, &end_iter);
+    gtk_text_buffer_insert(buffer, &end_iter, text, -1);
 
-  return CMN_SUCCESS;
+    mark = gtk_text_buffer_get_insert(buffer);
+    gtk_text_view_scroll_to_mark(GTK_TEXT_VIEW(textview->textview), mark, 0.0,
+                                 TRUE, 0.0, 1.0);
+  }
+#endif
+
+  return rc;
 }
 
 /**
@@ -1019,9 +1328,7 @@ cmn_error_e cmn_textview_append_text(cmn_textview_t *textview,
  */
 cmn_error_e cmn_textview_get_text(cmn_textview_t *textview,
                                   const char **out_text) {
-  GtkTextBuffer *buffer;
-  GtkTextIter start, end;
-  char *val;
+  int has_disp = 0;
   cmn_error_e rc;
 
   if (g_cmn_mock_textview_get_text_fail) {
@@ -1032,23 +1339,32 @@ cmn_error_e cmn_textview_get_text(cmn_textview_t *textview,
     return CMN_ERR_INVAL;
   }
 
-  buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(textview->textview));
-  gtk_text_buffer_get_start_iter(buffer, &start);
-  gtk_text_buffer_get_end_iter(buffer, &end);
-  val = gtk_text_buffer_get_text(buffer, &start, &end, FALSE);
+  rc = linux_has_display(&has_disp);
+#ifdef CMN_HAS_GTK3
+  if (has_disp && textview->textview != (GtkWidget *)textview) {
+    GtkTextBuffer *buffer =
+        gtk_text_view_get_buffer(GTK_TEXT_VIEW(textview->textview));
+    GtkTextIter start, end;
+    char *val;
+    gtk_text_buffer_get_start_iter(buffer, &start);
+    gtk_text_buffer_get_end_iter(buffer, &end);
+    val = gtk_text_buffer_get_text(buffer, &start, &end, FALSE);
 
-  if (val) {
-    rc = cmn_strcpy_s(textview->text_cache, sizeof(textview->text_cache), val);
-    g_free(val);
-    if (rc != CMN_SUCCESS) {
-      return rc;
+    if (val) {
+      rc = linux_accum_err(rc, cmn_strcpy_s(textview->text_cache,
+                                            sizeof(textview->text_cache), val));
+      g_free(val);
+      if (rc != CMN_SUCCESS) {
+        return rc;
+      }
+    } else {
+      textview->text_cache[0] = '\0';
     }
-  } else {
-    textview->text_cache[0] = '\0';
   }
+#endif
 
   *out_text = textview->text_cache;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -1057,12 +1373,21 @@ cmn_error_e cmn_textview_get_text(cmn_textview_t *textview,
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_textview_destroy(cmn_textview_t **textview) {
+  cmn_error_e rc;
+  int has_disp = 0;
   if (textview == NULL || *textview == NULL) {
     return CMN_ERR_INVAL;
   }
-  g_linux_map_rc = (int)cmn_handle_map_remove((*textview)->scrolled_window);
-  gtk_widget_destroy((*textview)->scrolled_window);
-  return cmn_free((void **)textview);
+  rc = linux_has_display(&has_disp);
+  rc = linux_accum_err(rc, linux_check_map_rc(cmn_handle_map_remove(
+                               (*textview)->scrolled_window)));
+#ifdef CMN_HAS_GTK3
+  if (has_disp && (*textview)->scrolled_window != NULL &&
+      (*textview)->scrolled_window != (GtkWidget *)(*textview)) {
+    gtk_widget_destroy((*textview)->scrolled_window);
+  }
+#endif
+  return linux_accum_err(rc, cmn_free((void **)textview));
 }
 
 /**
@@ -1073,6 +1398,7 @@ cmn_error_e cmn_textview_destroy(cmn_textview_t **textview) {
 cmn_error_e cmn_vbox_create(cmn_vbox_t **out_vbox) {
   cmn_error_e rc;
   cmn_vbox_t *vbox = NULL;
+  int has_disp = 0;
 
   if (out_vbox == NULL) {
     return CMN_ERR_INVAL;
@@ -1084,17 +1410,24 @@ cmn_error_e cmn_vbox_create(cmn_vbox_t **out_vbox) {
 
   rc = cmn_widget_header_init(&vbox->base, CMN_WIDGET_KIND_VBOX,
                               destroy_vbox_adapter);
-
   if (rc == CMN_SUCCESS) {
-    rc = ensure_gtk_init();
+    rc = linux_has_display(&has_disp);
   }
-  vbox->box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+#ifdef CMN_HAS_GTK3
+  if (has_disp) {
+    vbox->box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+  } else {
+    vbox->box = (GtkWidget *)vbox;
+  }
+#else
+  vbox->box = (GtkWidget *)vbox;
+#endif
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  g_linux_map_rc = (int)cmn_handle_map_add(vbox->box, vbox);
+  rc = linux_check_map_rc(cmn_handle_map_add(vbox->box, vbox));
   *out_vbox = vbox;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -1103,12 +1436,21 @@ cmn_error_e cmn_vbox_create(cmn_vbox_t **out_vbox) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_vbox_destroy(cmn_vbox_t **vbox) {
+  cmn_error_e rc;
+  int has_disp = 0;
   if (vbox == NULL || *vbox == NULL) {
     return CMN_ERR_INVAL;
   }
-  g_linux_map_rc = (int)cmn_handle_map_remove((*vbox)->box);
-  gtk_widget_destroy((*vbox)->box);
-  return cmn_free((void **)vbox);
+  rc = linux_has_display(&has_disp);
+  rc = linux_accum_err(rc,
+                       linux_check_map_rc(cmn_handle_map_remove((*vbox)->box)));
+#ifdef CMN_HAS_GTK3
+  if (has_disp && (*vbox)->box != NULL &&
+      (*vbox)->box != (GtkWidget *)(*vbox)) {
+    gtk_widget_destroy((*vbox)->box);
+  }
+#endif
+  return linux_accum_err(rc, cmn_free((void **)vbox));
 }
 
 /**
@@ -1119,6 +1461,7 @@ cmn_error_e cmn_vbox_destroy(cmn_vbox_t **vbox) {
 cmn_error_e cmn_hbox_create(cmn_hbox_t **out_hbox) {
   cmn_error_e rc;
   cmn_hbox_t *hbox = NULL;
+  int has_disp = 0;
 
   if (out_hbox == NULL) {
     return CMN_ERR_INVAL;
@@ -1130,17 +1473,24 @@ cmn_error_e cmn_hbox_create(cmn_hbox_t **out_hbox) {
 
   rc = cmn_widget_header_init(&hbox->base, CMN_WIDGET_KIND_HBOX,
                               destroy_hbox_adapter);
-
   if (rc == CMN_SUCCESS) {
-    rc = ensure_gtk_init();
+    rc = linux_has_display(&has_disp);
   }
-  hbox->box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+#ifdef CMN_HAS_GTK3
+  if (has_disp) {
+    hbox->box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+  } else {
+    hbox->box = (GtkWidget *)hbox;
+  }
+#else
+  hbox->box = (GtkWidget *)hbox;
+#endif
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  g_linux_map_rc = (int)cmn_handle_map_add(hbox->box, hbox);
+  rc = linux_check_map_rc(cmn_handle_map_add(hbox->box, hbox));
   *out_hbox = hbox;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -1149,12 +1499,21 @@ cmn_error_e cmn_hbox_create(cmn_hbox_t **out_hbox) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_hbox_destroy(cmn_hbox_t **hbox) {
+  cmn_error_e rc;
+  int has_disp = 0;
   if (hbox == NULL || *hbox == NULL) {
     return CMN_ERR_INVAL;
   }
-  g_linux_map_rc = (int)cmn_handle_map_remove((*hbox)->box);
-  gtk_widget_destroy((*hbox)->box);
-  return cmn_free((void **)hbox);
+  rc = linux_has_display(&has_disp);
+  rc = linux_accum_err(rc,
+                       linux_check_map_rc(cmn_handle_map_remove((*hbox)->box)));
+#ifdef CMN_HAS_GTK3
+  if (has_disp && (*hbox)->box != NULL &&
+      (*hbox)->box != (GtkWidget *)(*hbox)) {
+    gtk_widget_destroy((*hbox)->box);
+  }
+#endif
+  return linux_accum_err(rc, cmn_free((void **)hbox));
 }
 
 /**
@@ -1165,80 +1524,93 @@ cmn_error_e cmn_hbox_destroy(cmn_hbox_t **hbox) {
  */
 cmn_error_e cmn_automation_capture_screenshot(cmn_window_t *win,
                                               const char *out_filepath) {
-  GdkPixbuf *pixbuf = NULL;
-  gboolean res;
-  GtkWidget *offscreen;
-  GtkWidget *vbox_frame;
-  GtkWidget *hbar;
-  GtkWidget *child;
-  const gchar *title_str;
-  int iter;
+  int has_disp = 0;
+  cmn_error_e rc;
 
   if (win == NULL || out_filepath == NULL || out_filepath[0] == '\0') {
     return CMN_ERR_INVAL;
   }
 
-  title_str = gtk_window_get_title(GTK_WINDOW(win->window));
-  child = gtk_bin_get_child(GTK_BIN(win->window));
-
-  offscreen = gtk_offscreen_window_new();
-  gtk_window_set_default_size(
-      GTK_WINDOW(offscreen),
-      (win->base.bounds.width > 0) ? win->base.bounds.width : 480,
-      (win->base.bounds.height > 0) ? win->base.bounds.height : 360);
-
-  vbox_frame = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-  hbar = gtk_header_bar_new();
-  gtk_header_bar_set_show_close_button(GTK_HEADER_BAR(hbar), TRUE);
-  gtk_header_bar_set_title(GTK_HEADER_BAR(hbar), title_str ? title_str : "");
-  gtk_box_pack_start(GTK_BOX(vbox_frame), hbar, FALSE, FALSE, 0);
-
-  if (child != NULL) {
-    g_object_ref(child);
-    gtk_container_remove(GTK_CONTAINER(win->window), child);
-    if (!GTK_IS_FIXED(child)) {
-      gtk_widget_set_margin_start(child, 16);
-      gtk_widget_set_margin_end(child, 16);
-      gtk_widget_set_margin_top(child, 16);
-      gtk_widget_set_margin_bottom(child, 16);
-    }
-    gtk_box_pack_start(GTK_BOX(vbox_frame), child, TRUE, TRUE, 0);
+  rc = linux_has_display(&has_disp);
+  if (rc != CMN_SUCCESS) {
+    return rc;
   }
 
-  gtk_container_add(GTK_CONTAINER(offscreen), vbox_frame);
-  gtk_widget_show_all(offscreen);
-  gtk_window_set_focus(GTK_WINDOW(offscreen), NULL);
-  if (child != NULL && GTK_IS_CONTAINER(child)) {
-    GList *kids = gtk_container_get_children(GTK_CONTAINER(child));
-    GList *it;
-    for (it = kids; it != NULL; it = it->next) {
-      if (GTK_IS_EDITABLE(it->data)) {
-        gtk_editable_select_region(GTK_EDITABLE(it->data), 0, 0);
+#ifdef CMN_HAS_GTK3
+  if (has_disp && win->window != (GtkWidget *)win) {
+    GdkPixbuf *pixbuf = NULL;
+    gboolean res;
+    GtkWidget *offscreen;
+    GtkWidget *vbox_frame;
+    GtkWidget *hbar;
+    GtkWidget *child;
+    const gchar *title_str;
+    int iter;
+
+    title_str = gtk_window_get_title(GTK_WINDOW(win->window));
+    child = gtk_bin_get_child(GTK_BIN(win->window));
+
+    offscreen = gtk_offscreen_window_new();
+    gtk_window_set_default_size(
+        GTK_WINDOW(offscreen),
+        (win->base.bounds.width > 0) ? win->base.bounds.width : 480,
+        (win->base.bounds.height > 0) ? win->base.bounds.height : 360);
+
+    vbox_frame = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    hbar = gtk_header_bar_new();
+    gtk_header_bar_set_show_close_button(GTK_HEADER_BAR(hbar), TRUE);
+    gtk_header_bar_set_title(GTK_HEADER_BAR(hbar), title_str ? title_str : "");
+    gtk_box_pack_start(GTK_BOX(vbox_frame), hbar, FALSE, FALSE, 0);
+
+    if (child != NULL) {
+      g_object_ref(child);
+      gtk_container_remove(GTK_CONTAINER(win->window), child);
+      if (!GTK_IS_FIXED(child)) {
+        gtk_widget_set_margin_start(child, 16);
+        gtk_widget_set_margin_end(child, 16);
+        gtk_widget_set_margin_top(child, 16);
+        gtk_widget_set_margin_bottom(child, 16);
       }
+      gtk_box_pack_start(GTK_BOX(vbox_frame), child, TRUE, TRUE, 0);
     }
-    g_list_free(kids);
-  }
 
-  for (iter = 0; iter < 200 && gtk_events_pending(); ++iter) {
-    gtk_main_iteration_do(FALSE);
-  }
-  gtk_window_set_focus(GTK_WINDOW(offscreen), NULL);
+    gtk_container_add(GTK_CONTAINER(offscreen), vbox_frame);
+    gtk_widget_show_all(offscreen);
+    gtk_window_set_focus(GTK_WINDOW(offscreen), NULL);
+    if (child != NULL && GTK_IS_CONTAINER(child)) {
+      GList *kids = gtk_container_get_children(GTK_CONTAINER(child));
+      GList *it;
+      for (it = kids; it != NULL; it = it->next) {
+        if (GTK_IS_EDITABLE(it->data)) {
+          gtk_editable_select_region(GTK_EDITABLE(it->data), 0, 0);
+        }
+      }
+      g_list_free(kids);
+    }
 
-  pixbuf = gtk_offscreen_window_get_pixbuf(GTK_OFFSCREEN_WINDOW(offscreen));
+    for (iter = 0; iter < 200 && gtk_events_pending(); ++iter) {
+      gtk_main_iteration_do(FALSE);
+    }
+    gtk_window_set_focus(GTK_WINDOW(offscreen), NULL);
 
-  if (child != NULL) {
-    gtk_container_remove(GTK_CONTAINER(vbox_frame), child);
-    gtk_container_add(GTK_CONTAINER(win->window), child);
-    g_object_unref(child);
-  }
-  gtk_widget_destroy(offscreen);
+    pixbuf = gtk_offscreen_window_get_pixbuf(GTK_OFFSCREEN_WINDOW(offscreen));
 
-  if (!pixbuf) {
-    return CMN_ERR_IO;
+    if (child != NULL) {
+      gtk_container_remove(GTK_CONTAINER(vbox_frame), child);
+      gtk_container_add(GTK_CONTAINER(win->window), child);
+      g_object_unref(child);
+    }
+    gtk_widget_destroy(offscreen);
+
+    if (pixbuf) {
+      res = gdk_pixbuf_save(pixbuf, out_filepath, "png", NULL, NULL);
+      g_object_unref(pixbuf);
+      return res ? CMN_SUCCESS : CMN_ERR_IO;
+    }
   }
-  res = gdk_pixbuf_save(pixbuf, out_filepath, "png", NULL, NULL);
-  g_object_unref(pixbuf);
-  return res ? CMN_SUCCESS : CMN_ERR_IO;
+#endif
+
+  return linux_write_headless_png(out_filepath);
 }
 
 /* --- Menus --- */
@@ -1251,6 +1623,7 @@ cmn_error_e cmn_automation_capture_screenshot(cmn_window_t *win,
 cmn_error_e cmn_menu_create(cmn_menu_t **out_menu) {
   cmn_error_e rc;
   cmn_menu_t *m = NULL;
+  int has_disp = 0;
   if (out_menu == NULL) {
     return CMN_ERR_INVAL;
   }
@@ -1262,10 +1635,14 @@ cmn_error_e cmn_menu_create(cmn_menu_t **out_menu) {
   rc = cmn_widget_header_init(&m->base, CMN_WIDGET_KIND_MENU,
                               destroy_menu_adapter);
   if (rc == CMN_SUCCESS) {
-    rc = ensure_gtk_init();
+    rc = linux_has_display(&has_disp);
   }
-  m->gtk_menu = gtk_menu_new();
-  m->gtk_menu_bar = gtk_menu_bar_new();
+#ifdef CMN_HAS_GTK3
+  if (has_disp) {
+    m->gtk_menu = gtk_menu_new();
+    m->gtk_menu_bar = gtk_menu_bar_new();
+  }
+#endif
   *out_menu = m;
   return rc;
 }
@@ -1282,6 +1659,7 @@ cmn_error_e cmn_menu_destroy(cmn_menu_t **menu) {
   return cmn_free((void **)menu);
 }
 
+#ifdef CMN_HAS_GTK3
 /**
  * @brief GTK3 menu item activation callback adapter.
  * @param item The activated GTK menu item.
@@ -1299,6 +1677,7 @@ static cmn_error_e linux_menu_item_activate(GtkMenuItem *item,
   }
   return CMN_SUCCESS;
 }
+#endif
 
 /**
  * @brief Adds an item to a menu.
@@ -1310,7 +1689,8 @@ static cmn_error_e linux_menu_item_activate(GtkMenuItem *item,
  */
 cmn_error_e cmn_menu_add_item(cmn_menu_t *menu, const char *title,
                               cmn_error_e (*on_click)(void *), void *userdata) {
-  GtkWidget *item;
+  int has_disp = 0;
+  cmn_error_e rc;
   if (menu == NULL || title == NULL) {
     return CMN_ERR_INVAL;
   }
@@ -1320,17 +1700,21 @@ cmn_error_e cmn_menu_add_item(cmn_menu_t *menu, const char *title,
 
   menu->items[menu->item_count].on_click = on_click;
   menu->items[menu->item_count].userdata = userdata;
+  rc = linux_has_display(&has_disp);
 
-  item = gtk_menu_item_new_with_label(title);
-  if (on_click) {
-    g_signal_connect(item, "activate", G_CALLBACK(linux_menu_item_activate),
-                     &menu->items[menu->item_count]);
+#ifdef CMN_HAS_GTK3
+  if (has_disp && menu->gtk_menu != NULL) {
+    GtkWidget *item = gtk_menu_item_new_with_label(title);
+    if (on_click) {
+      g_signal_connect(item, "activate", G_CALLBACK(linux_menu_item_activate),
+                       &menu->items[menu->item_count]);
+    }
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu->gtk_menu), item);
+    gtk_widget_show(item);
   }
+#endif
   menu->item_count++;
-
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu->gtk_menu), item);
-  gtk_widget_show(item);
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -1383,7 +1767,7 @@ cmn_error_e cmn_filepicker_create(cmn_filepicker_t **out_filepicker) {
                               destroy_filepicker_adapter);
   fp->path = NULL;
   *out_filepicker = fp;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /** @brief Mock flag to bypass `cmn_filepicker_show_dialog`. */
@@ -1405,11 +1789,8 @@ cmn_error_e cmn_mock_filepicker_show_dialog_set(int bypass) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_filepicker_show_dialog(cmn_filepicker_t *filepicker) {
-  GtkWidget *dialog;
-  GtkFileChooserAction action = GTK_FILE_CHOOSER_ACTION_OPEN;
-#ifndef CMN_TESTING
-  gint res;
-#endif
+  int has_disp = 0;
+  cmn_error_e rc;
 
   if (filepicker == NULL) {
     return CMN_ERR_INVAL;
@@ -1419,28 +1800,45 @@ cmn_error_e cmn_filepicker_show_dialog(cmn_filepicker_t *filepicker) {
     return CMN_SUCCESS;
   }
 
-  dialog = gtk_file_chooser_dialog_new("Open File", NULL, action, "_Cancel",
-                                       GTK_RESPONSE_CANCEL, "_Open",
-                                       GTK_RESPONSE_ACCEPT, NULL);
-
-#ifdef CMN_TESTING
-  if (filepicker->path) {
-    g_free(filepicker->path);
+  rc = linux_has_display(&has_disp);
+  if (filepicker->path != NULL) {
+    rc = linux_accum_err(rc, cmn_free((void **)&filepicker->path));
   }
-  filepicker->path = g_strdup("/tmp/test");
-#else
-  res = gtk_dialog_run(GTK_DIALOG(dialog));
-  if (res == GTK_RESPONSE_ACCEPT) {
-    GtkFileChooser *chooser = GTK_FILE_CHOOSER(dialog);
-    if (filepicker->path) {
-      g_free(filepicker->path);
+
+#ifdef CMN_HAS_GTK3
+  if (has_disp) {
+    GtkWidget *dialog = gtk_file_chooser_dialog_new(
+        "Open File", NULL, GTK_FILE_CHOOSER_ACTION_OPEN, "_Cancel",
+        GTK_RESPONSE_CANCEL, "_Open", GTK_RESPONSE_ACCEPT, NULL);
+#ifndef CMN_TESTING
+    gint res = gtk_dialog_run(GTK_DIALOG(dialog));
+    if (res == GTK_RESPONSE_ACCEPT) {
+      char *gpath = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+      if (gpath != NULL) {
+        size_t len = strlen(gpath) + 1u;
+        rc = linux_accum_err(rc, cmn_malloc(len, (void **)&filepicker->path));
+        if (filepicker->path != NULL) {
+          rc = linux_accum_err(rc, cmn_strcpy_s(filepicker->path, len, gpath));
+        }
+        g_free(gpath);
+      }
     }
-    filepicker->path = gtk_file_chooser_get_filename(chooser);
+#endif
+    gtk_widget_destroy(dialog);
   }
 #endif
 
-  gtk_widget_destroy(dialog);
-  return CMN_SUCCESS;
+#ifdef CMN_TESTING
+  if (filepicker->path == NULL) {
+    rc = linux_accum_err(rc, cmn_malloc(16u, (void **)&filepicker->path));
+    if (filepicker->path != NULL) {
+      rc =
+          linux_accum_err(rc, cmn_strcpy_s(filepicker->path, 16u, "/tmp/test"));
+    }
+  }
+#endif
+
+  return rc;
 }
 
 /**
@@ -1464,13 +1862,14 @@ cmn_error_e cmn_filepicker_get_path(cmn_filepicker_t *filepicker,
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_filepicker_destroy(cmn_filepicker_t **filepicker) {
+  cmn_error_e rc = CMN_SUCCESS;
   if (filepicker == NULL || *filepicker == NULL) {
     return CMN_ERR_INVAL;
   }
-  if ((*filepicker)->path) {
-    g_free((*filepicker)->path);
+  if ((*filepicker)->path != NULL) {
+    rc = cmn_free((void **)&(*filepicker)->path);
   }
-  return cmn_free((void **)filepicker);
+  return linux_accum_err(rc, cmn_free((void **)filepicker));
 }
 
 /* --- Accessibility (a11y) Overrides --- */
@@ -1484,6 +1883,8 @@ cmn_error_e cmn_filepicker_destroy(cmn_filepicker_t **filepicker) {
 cmn_error_e cmn_a11y_set_label(void *widget, const char *label) {
   GtkWidget *gtk_widget = NULL;
   cmn_widget_kind_e kind;
+  int has_disp = 0;
+  cmn_error_e rc;
   if (widget == NULL || label == NULL) {
     return CMN_ERR_INVAL;
   }
@@ -1517,10 +1918,18 @@ cmn_error_e cmn_a11y_set_label(void *widget, const char *label) {
     return CMN_ERR_INVAL;
   }
 
-  if (GTK_IS_WIDGET(gtk_widget)) {
+  rc = linux_has_display(&has_disp);
+#ifdef CMN_HAS_GTK3
+  if (has_disp && gtk_widget != NULL && gtk_widget != (GtkWidget *)widget &&
+      GTK_IS_WIDGET(gtk_widget)) {
     atk_object_set_name(gtk_widget_get_accessible(gtk_widget), label);
   }
-  return CMN_SUCCESS;
+#else
+  if (gtk_widget == NULL) {
+    return CMN_ERR_INVAL;
+  }
+#endif
+  return rc;
 }
 
 /**
@@ -1561,6 +1970,7 @@ cmn_error_e cmn_a11y_set_tabindex(void *widget, int index) {
   return CMN_SUCCESS;
 }
 
+#ifdef CMN_HAS_GTK3
 /**
  * @brief GTK3 Cairo draw callback for custom 2D canvas and WebView widgets.
  * @param widget The drawing area widget.
@@ -1647,6 +2057,7 @@ static gboolean linux_custom_view_draw(GtkWidget *widget, cairo_t *cr,
   }
   return FALSE;
 }
+#endif
 
 /**
  * @brief Backend hook creating the native OS control for an extended widget.
@@ -1654,78 +2065,84 @@ static gboolean linux_custom_view_draw(GtkWidget *widget, cairo_t *cr,
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_backend_widget_init(cmn_widget_header_t *hdr) {
-  GtkWidget *w = NULL;
+  int has_disp = 0;
   cmn_error_e rc;
   if (hdr == NULL) {
     return CMN_ERR_INVAL;
   }
-  rc = ensure_gtk_init();
-  if (rc != CMN_SUCCESS) {
+  rc = linux_has_display(&has_disp);
+  if (rc != CMN_SUCCESS || !has_disp) {
     return rc;
   }
-  switch (hdr->kind) {
-  case CMN_WIDGET_KIND_CHECKBOX:
-    w = gtk_check_button_new_with_label("");
-    break;
-  case CMN_WIDGET_KIND_RADIOBUTTON:
-    w = gtk_radio_button_new_with_label(NULL, "");
-    break;
-  case CMN_WIDGET_KIND_TOGGLEBUTTON:
-    w = gtk_toggle_button_new_with_label("");
-    break;
-  case CMN_WIDGET_KIND_LINE:
-    w = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
-    break;
-  case CMN_WIDGET_KIND_SLIDER:
-    w = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.0, 1.0, 0.01);
-    break;
-  case CMN_WIDGET_KIND_PROGRESS:
-    w = gtk_progress_bar_new();
-    break;
-  case CMN_WIDGET_KIND_UPDOWN:
-    w = gtk_spin_button_new_with_range(-1000000.0, 1000000.0, 1.0);
-    break;
-  case CMN_WIDGET_KIND_POPUP:
-    w = gtk_combo_box_text_new();
-    break;
-  case CMN_WIDGET_KIND_COMBO:
-    w = gtk_combo_box_text_new_with_entry();
-    break;
-  case CMN_WIDGET_KIND_LISTBOX:
-  case CMN_WIDGET_KIND_TABLEVIEW: {
-    GtkWidget *sv = gtk_scrolled_window_new(NULL, NULL);
-    GtkWidget *tv = gtk_text_view_new();
-    gtk_text_view_set_editable(GTK_TEXT_VIEW(tv), FALSE);
-    gtk_text_view_set_monospace(GTK_TEXT_VIEW(tv), TRUE);
-    gtk_scrolled_window_set_shadow_type(GTK_SCROLLED_WINDOW(sv), GTK_SHADOW_IN);
-    gtk_container_add(GTK_CONTAINER(sv), tv);
-    w = sv;
-    break;
+#ifdef CMN_HAS_GTK3
+  {
+    GtkWidget *w = NULL;
+    switch (hdr->kind) {
+    case CMN_WIDGET_KIND_CHECKBOX:
+      w = gtk_check_button_new_with_label("");
+      break;
+    case CMN_WIDGET_KIND_RADIOBUTTON:
+      w = gtk_radio_button_new_with_label(NULL, "");
+      break;
+    case CMN_WIDGET_KIND_TOGGLEBUTTON:
+      w = gtk_toggle_button_new_with_label("");
+      break;
+    case CMN_WIDGET_KIND_LINE:
+      w = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+      break;
+    case CMN_WIDGET_KIND_SLIDER:
+      w = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.0, 1.0, 0.01);
+      break;
+    case CMN_WIDGET_KIND_PROGRESS:
+      w = gtk_progress_bar_new();
+      break;
+    case CMN_WIDGET_KIND_UPDOWN:
+      w = gtk_spin_button_new_with_range(-1000000.0, 1000000.0, 1.0);
+      break;
+    case CMN_WIDGET_KIND_POPUP:
+      w = gtk_combo_box_text_new();
+      break;
+    case CMN_WIDGET_KIND_COMBO:
+      w = gtk_combo_box_text_new_with_entry();
+      break;
+    case CMN_WIDGET_KIND_LISTBOX:
+    case CMN_WIDGET_KIND_TABLEVIEW: {
+      GtkWidget *sv = gtk_scrolled_window_new(NULL, NULL);
+      GtkWidget *tv = gtk_text_view_new();
+      gtk_text_view_set_editable(GTK_TEXT_VIEW(tv), FALSE);
+      gtk_text_view_set_monospace(GTK_TEXT_VIEW(tv), TRUE);
+      gtk_scrolled_window_set_shadow_type(GTK_SCROLLED_WINDOW(sv),
+                                          GTK_SHADOW_IN);
+      gtk_container_add(GTK_CONTAINER(sv), tv);
+      w = sv;
+      break;
+    }
+    case CMN_WIDGET_KIND_IMAGEVIEW:
+      w = gtk_image_new();
+      break;
+    case CMN_WIDGET_KIND_VIEW:
+    case CMN_WIDGET_KIND_WEBVIEW:
+      w = gtk_drawing_area_new();
+      g_signal_connect(w, "draw", G_CALLBACK(linux_custom_view_draw), hdr);
+      break;
+    case CMN_WIDGET_KIND_PANEL:
+      w = gtk_frame_new("Panel Container (cmn_panel_t)");
+      break;
+    case CMN_WIDGET_KIND_TABS:
+      w = gtk_notebook_new();
+      break;
+    case CMN_WIDGET_KIND_SPLITVIEW:
+      w = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
+      break;
+    default:
+      break;
+    }
+    if (w != NULL) {
+      g_object_ref_sink(w);
+      hdr->native_handle = w;
+    }
   }
-  case CMN_WIDGET_KIND_IMAGEVIEW:
-    w = gtk_image_new();
-    break;
-  case CMN_WIDGET_KIND_VIEW:
-  case CMN_WIDGET_KIND_WEBVIEW:
-    w = gtk_drawing_area_new();
-    g_signal_connect(w, "draw", G_CALLBACK(linux_custom_view_draw), hdr);
-    break;
-  case CMN_WIDGET_KIND_PANEL:
-    w = gtk_frame_new("Panel Container (cmn_panel_t)");
-    break;
-  case CMN_WIDGET_KIND_TABS:
-    w = gtk_notebook_new();
-    break;
-  case CMN_WIDGET_KIND_SPLITVIEW:
-    w = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
-    break;
-  default:
-    break;
-  }
-  if (w != NULL) {
-    g_object_ref_sink(w);
-    hdr->native_handle = w;
-  }
+#endif
   return CMN_SUCCESS;
 }
 
@@ -1736,14 +2153,17 @@ cmn_error_e cmn_backend_widget_init(cmn_widget_header_t *hdr) {
  */
 cmn_error_e cmn_backend_widget_sync(cmn_widget_header_t *hdr) {
   GtkWidget *w;
-  cmn_error_e rc = CMN_SUCCESS;
+  int has_disp = 0;
+  cmn_error_e rc;
   if (hdr == NULL) {
     return CMN_ERR_INVAL;
   }
+  rc = linux_has_display(&has_disp);
   w = (GtkWidget *)hdr->native_handle;
-  if (w == NULL) {
-    return CMN_SUCCESS;
+  if (!has_disp || w == NULL) {
+    return rc;
   }
+#ifdef CMN_HAS_GTK3
   switch (hdr->kind) {
   case CMN_WIDGET_KIND_CHECKBOX: {
     cmn_checkbox_t *cb = (cmn_checkbox_t *)hdr;
@@ -1831,7 +2251,7 @@ cmn_error_e cmn_backend_widget_sync(cmn_widget_header_t *hdr) {
         }
         fmt_rc = cmn_sprintf_s(text_buf + pos, sizeof(text_buf) - pos, "%s%s\n",
                                pfx, lb->items[i]);
-        rc = (rc != CMN_SUCCESS) ? rc : fmt_rc;
+        rc = linux_accum_err(rc, fmt_rc);
         pos = strlen(text_buf);
       }
       gtk_text_buffer_set_text(buf, text_buf, -1);
@@ -1851,27 +2271,27 @@ cmn_error_e cmn_backend_widget_sync(cmn_widget_header_t *hdr) {
       for (c = 0; c < tbl->col_count; ++c) {
         fmt_rc = cmn_sprintf_s(text_buf + pos, sizeof(text_buf) - pos, "%-16s",
                                tbl->col_titles[c]);
-        rc = (rc != CMN_SUCCESS) ? rc : fmt_rc;
+        rc = linux_accum_err(rc, fmt_rc);
         pos = strlen(text_buf);
       }
-      fmt_rc = cmn_sprintf_s(text_buf + pos, sizeof(text_buf) - pos,
-                             "\n-----------------------------------------------"
-                             "-\n");
-      rc = (rc != CMN_SUCCESS) ? rc : fmt_rc;
+      fmt_rc =
+          cmn_sprintf_s(text_buf + pos, sizeof(text_buf) - pos,
+                        "\n------------------------------------------------\n");
+      rc = linux_accum_err(rc, fmt_rc);
       pos = strlen(text_buf);
       for (r = 0; r < tbl->row_count; ++r) {
         fmt_rc = cmn_sprintf_s(text_buf + pos, sizeof(text_buf) - pos, "%s",
                                (r == tbl->selected_row) ? "> " : "  ");
-        rc = (rc != CMN_SUCCESS) ? rc : fmt_rc;
+        rc = linux_accum_err(rc, fmt_rc);
         pos = strlen(text_buf);
         for (c = 0; c < tbl->col_count; ++c) {
           fmt_rc = cmn_sprintf_s(text_buf + pos, sizeof(text_buf) - pos,
                                  "%-16s", tbl->cells[r][c]);
-          rc = (rc != CMN_SUCCESS) ? rc : fmt_rc;
+          rc = linux_accum_err(rc, fmt_rc);
           pos = strlen(text_buf);
         }
         fmt_rc = cmn_sprintf_s(text_buf + pos, sizeof(text_buf) - pos, "\n");
-        rc = (rc != CMN_SUCCESS) ? rc : fmt_rc;
+        rc = linux_accum_err(rc, fmt_rc);
         pos = strlen(text_buf);
       }
       gtk_text_buffer_set_text(buf, text_buf, -1);
@@ -1951,6 +2371,7 @@ cmn_error_e cmn_backend_widget_sync(cmn_widget_header_t *hdr) {
     gtk_widget_queue_draw(w);
     break;
   }
+#endif
   return rc;
 }
 
@@ -1961,14 +2382,21 @@ cmn_error_e cmn_backend_widget_sync(cmn_widget_header_t *hdr) {
  */
 cmn_error_e cmn_backend_widget_cleanup(cmn_widget_header_t *hdr) {
   GtkWidget *w;
+  int has_disp = 0;
+  cmn_error_e rc;
   if (hdr == NULL) {
     return CMN_ERR_INVAL;
   }
+  rc = linux_has_display(&has_disp);
   w = (GtkWidget *)hdr->native_handle;
   if (w != NULL) {
-    gtk_widget_destroy(w);
-    g_object_unref(w);
+#ifdef CMN_HAS_GTK3
+    if (has_disp) {
+      gtk_widget_destroy(w);
+      g_object_unref(w);
+    }
+#endif
     hdr->native_handle = NULL;
   }
-  return CMN_SUCCESS;
+  return rc;
 }

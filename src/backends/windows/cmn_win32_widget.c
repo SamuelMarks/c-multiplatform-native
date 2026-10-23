@@ -17,8 +17,26 @@
 
 /** @brief Mock flag to force `cmn_textbox_get_text` failure. */
 static int g_cmn_mock_textbox_get_text_fail = 0;
-/** @brief Last handle map operation status code. */
-static int g_win32_map_rc = 0;
+
+/**
+ * @brief Normalizes handle map status codes when the global handle map is
+ * uninitialized.
+ * @param rc Status code returned by handle map helper.
+ * @return CMN_SUCCESS unless an unexpected internal failure occurred.
+ */
+static cmn_error_e win32_check_map_rc(cmn_error_e rc) {
+  return (rc == CMN_ERR_NOMEM) ? rc : CMN_SUCCESS;
+}
+
+/**
+ * @brief Combines two error codes, preserving the first failure encountered.
+ * @param first Initial error code.
+ * @param second Subsequent error code.
+ * @return First non-success code, or CMN_SUCCESS.
+ */
+static cmn_error_e win32_accum_err(cmn_error_e first, cmn_error_e second) {
+  return (first != CMN_SUCCESS) ? first : second;
+}
 
 /**
  * @brief Sets mock failure state for cmn_textbox_get_text.
@@ -312,8 +330,11 @@ static LRESULT CALLBACK cmn_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam,
                         hdr->kind == CMN_WIDGET_KIND_SPLITVIEW)) {
       PAINTSTRUCT ps;
       HDC hdc = BeginPaint(hwnd, &ps);
-      g_win32_map_rc = (int)win32_paint_custom_widget(hwnd, hdc, hdr);
+      cmn_error_e rc = win32_paint_custom_widget(hwnd, hdc, hdr);
       EndPaint(hwnd, &ps);
+      if (rc != CMN_SUCCESS) {
+        return (LRESULT)rc;
+      }
       return 0;
     }
   } else if (msg == WM_PRINTCLIENT) {
@@ -323,7 +344,10 @@ static LRESULT CALLBACK cmn_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam,
                         hdr->kind == CMN_WIDGET_KIND_WEBVIEW ||
                         hdr->kind == CMN_WIDGET_KIND_IMAGEVIEW ||
                         hdr->kind == CMN_WIDGET_KIND_SPLITVIEW)) {
-      g_win32_map_rc = (int)win32_paint_custom_widget(hwnd, (HDC)wParam, hdr);
+      cmn_error_e rc = win32_paint_custom_widget(hwnd, (HDC)wParam, hdr);
+      if (rc != CMN_SUCCESS) {
+        return (LRESULT)rc;
+      }
       return 0;
     }
   } else if (msg == WM_COMMAND) {
@@ -333,14 +357,18 @@ static LRESULT CALLBACK cmn_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam,
       if (wmId >= 100 && wmId < 100 + MAX_BUTTONS) {
         cmn_button_t *btn = g_button_map[wmId - 100];
         if (btn && btn->on_click) {
-          g_win32_map_rc = (int)btn->on_click(btn->userdata);
+          if (btn->on_click(btn->userdata) != CMN_SUCCESS) {
+            return 0;
+          }
         }
       }
     } else if (wmEvent == 0) {
       if (wmId >= 1000 && wmId < 1000 + MAX_MENU_ITEMS) {
         if (g_menu_item_map[wmId - 1000].on_click) {
-          g_win32_map_rc = (int)g_menu_item_map[wmId - 1000].on_click(
-              g_menu_item_map[wmId - 1000].userdata);
+          if (g_menu_item_map[wmId - 1000].on_click(
+                  g_menu_item_map[wmId - 1000].userdata) != CMN_SUCCESS) {
+            return 0;
+          }
         }
       }
     }
@@ -583,9 +611,7 @@ cmn_error_e cmn_automation_capture_screenshot(cmn_window_t *win,
 
   if (!BitBlt(hMemoryDC, 0, 0, width, height, hWindowDC, rect.left, rect.top,
               SRCCOPY)) {
-    if (!PrintWindow(win->hwnd, hMemoryDC, 0)) {
-      g_win32_map_rc = 0;
-    }
+    PrintWindow(win->hwnd, hMemoryDC, 0);
   }
   {
     POINT pt_client = {0, 0};
@@ -675,7 +701,13 @@ cmn_error_e cmn_automation_capture_screenshot(cmn_window_t *win,
   GetDIBits(hWindowDC, hBitmap, 0, (UINT)height, lpbitmap, (BITMAPINFO *)&bi,
             DIB_RGB_COLORS);
 
-  g_win32_map_rc = (int)utf8_to_utf16(out_filepath, wpath, 1024);
+  if (utf8_to_utf16(out_filepath, wpath, 1024) != CMN_SUCCESS) {
+    cmn_error_e free_rc = cmn_free((void **)&lpbitmap);
+    DeleteObject(hBitmap);
+    DeleteDC(hMemoryDC);
+    ReleaseDC(NULL, hWindowDC);
+    return free_rc != CMN_SUCCESS ? free_rc : CMN_ERR_INVAL;
+  }
   hFile = CreateFileW(wpath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
                       FILE_ATTRIBUTE_NORMAL, NULL);
   if (hFile == INVALID_HANDLE_VALUE) {
@@ -691,83 +723,89 @@ cmn_error_e cmn_automation_capture_screenshot(cmn_window_t *win,
   num_blocks = (raw_size + 65534u) / 65535u;
   zlib_size = 2u + num_blocks * 5u + raw_size + 4u;
 
-  if (cmn_malloc(raw_size, (void **)&raw_scanlines) == CMN_SUCCESS &&
-      cmn_malloc(zlib_size, (void **)&zlib_stream) == CMN_SUCCESS) {
-    for (y = 0; y < height; ++y) {
-      size_t dst_off = (size_t)y * row_bytes;
-      size_t src_off = (size_t)y * (size_t)width * 4u;
-      raw_scanlines[dst_off] = 0;
-      for (x = 0; x < width; ++x) {
-        size_t px = src_off + (size_t)x * 4u;
-        size_t dx = dst_off + 1u + (size_t)x * 4u;
-        raw_scanlines[dx + 0] = lpbitmap[px + 2];
-        raw_scanlines[dx + 1] = lpbitmap[px + 1];
-        raw_scanlines[dx + 2] = lpbitmap[px + 0];
-        raw_scanlines[dx + 3] = 255u;
+  {
+    cmn_error_e png_rc = CMN_SUCCESS;
+    if (cmn_malloc(raw_size, (void **)&raw_scanlines) == CMN_SUCCESS &&
+        cmn_malloc(zlib_size, (void **)&zlib_stream) == CMN_SUCCESS) {
+      for (y = 0; y < height; ++y) {
+        size_t dst_off = (size_t)y * row_bytes;
+        size_t src_off = (size_t)y * (size_t)width * 4u;
+        raw_scanlines[dst_off] = 0;
+        for (x = 0; x < width; ++x) {
+          size_t px = src_off + (size_t)x * 4u;
+          size_t dx = dst_off + 1u + (size_t)x * 4u;
+          raw_scanlines[dx + 0] = lpbitmap[px + 2];
+          raw_scanlines[dx + 1] = lpbitmap[px + 1];
+          raw_scanlines[dx + 2] = lpbitmap[px + 0];
+          raw_scanlines[dx + 3] = 255u;
+        }
       }
+
+      for (i = 0; i < raw_size; ++i) {
+        s1 = (s1 + raw_scanlines[i]) % 65521u;
+        s2 = (s2 + s1) % 65521u;
+      }
+      adler = (s2 << 16) | s1;
+
+      zlib_stream[0] = 0x78u;
+      zlib_stream[1] = 0x01u;
+      zpos = 2u;
+      offset = 0u;
+      while (offset < raw_size) {
+        size_t chunk = raw_size - offset;
+        unsigned char bfinal = 0u;
+        uint16_t len16;
+        uint16_t nlen16;
+        if (chunk > 65535u) {
+          chunk = 65535u;
+        }
+        if (offset + chunk >= raw_size) {
+          bfinal = 1u;
+        }
+        len16 = (uint16_t)chunk;
+        nlen16 = (uint16_t)(~len16);
+        zlib_stream[zpos++] = bfinal;
+        zlib_stream[zpos++] = (unsigned char)(len16 & 0xFFu);
+        zlib_stream[zpos++] = (unsigned char)((len16 >> 8) & 0xFFu);
+        zlib_stream[zpos++] = (unsigned char)(nlen16 & 0xFFu);
+        zlib_stream[zpos++] = (unsigned char)((nlen16 >> 8) & 0xFFu);
+        memcpy(zlib_stream + zpos, raw_scanlines + offset, chunk);
+        zpos += chunk;
+        offset += chunk;
+      }
+      png_rc = win32_accum_err(png_rc, win32_be32(zlib_stream + zpos, adler));
+      zpos += 4u;
+
+      WriteFile(hFile, png_sig, 8, &dwBytesWritten, NULL);
+      png_rc = win32_accum_err(png_rc, win32_be32(ihdr, (uint32_t)width));
+      png_rc = win32_accum_err(png_rc, win32_be32(ihdr + 4, (uint32_t)height));
+      ihdr[8] = 8u;
+      ihdr[9] = 6u;
+      ihdr[10] = 0u;
+      ihdr[11] = 0u;
+      ihdr[12] = 0u;
+      png_rc = win32_accum_err(png_rc,
+                               win32_write_png_chunk(hFile, "IHDR", ihdr, 13u));
+      png_rc = win32_accum_err(
+          png_rc,
+          win32_write_png_chunk(hFile, "IDAT", zlib_stream, (uint32_t)zpos));
+      png_rc = win32_accum_err(png_rc,
+                               win32_write_png_chunk(hFile, "IEND", NULL, 0u));
     }
 
-    for (i = 0; i < raw_size; ++i) {
-      s1 = (s1 + raw_scanlines[i]) % 65521u;
-      s2 = (s2 + s1) % 65521u;
+    if (zlib_stream != NULL) {
+      png_rc = win32_accum_err(png_rc, cmn_free((void **)&zlib_stream));
     }
-    adler = (s2 << 16) | s1;
-
-    zlib_stream[0] = 0x78u;
-    zlib_stream[1] = 0x01u;
-    zpos = 2u;
-    offset = 0u;
-    while (offset < raw_size) {
-      size_t chunk = raw_size - offset;
-      unsigned char bfinal = 0u;
-      uint16_t len16;
-      uint16_t nlen16;
-      if (chunk > 65535u) {
-        chunk = 65535u;
-      }
-      if (offset + chunk >= raw_size) {
-        bfinal = 1u;
-      }
-      len16 = (uint16_t)chunk;
-      nlen16 = (uint16_t)(~len16);
-      zlib_stream[zpos++] = bfinal;
-      zlib_stream[zpos++] = (unsigned char)(len16 & 0xFFu);
-      zlib_stream[zpos++] = (unsigned char)((len16 >> 8) & 0xFFu);
-      zlib_stream[zpos++] = (unsigned char)(nlen16 & 0xFFu);
-      zlib_stream[zpos++] = (unsigned char)((nlen16 >> 8) & 0xFFu);
-      memcpy(zlib_stream + zpos, raw_scanlines + offset, chunk);
-      zpos += chunk;
-      offset += chunk;
+    if (raw_scanlines != NULL) {
+      png_rc = win32_accum_err(png_rc, cmn_free((void **)&raw_scanlines));
     }
-    g_win32_map_rc = (int)win32_be32(zlib_stream + zpos, adler);
-    zpos += 4u;
+    CloseHandle(hFile);
+    DeleteObject(hBitmap);
+    DeleteDC(hMemoryDC);
+    ReleaseDC(NULL, hWindowDC);
 
-    WriteFile(hFile, png_sig, 8, &dwBytesWritten, NULL);
-    g_win32_map_rc = (int)win32_be32(ihdr, (uint32_t)width);
-    g_win32_map_rc = (int)win32_be32(ihdr + 4, (uint32_t)height);
-    ihdr[8] = 8u;
-    ihdr[9] = 6u;
-    ihdr[10] = 0u;
-    ihdr[11] = 0u;
-    ihdr[12] = 0u;
-    g_win32_map_rc = (int)win32_write_png_chunk(hFile, "IHDR", ihdr, 13u);
-    g_win32_map_rc =
-        (int)win32_write_png_chunk(hFile, "IDAT", zlib_stream, (uint32_t)zpos);
-    g_win32_map_rc = (int)win32_write_png_chunk(hFile, "IEND", NULL, 0u);
+    return win32_accum_err(png_rc, cmn_free((void **)&lpbitmap));
   }
-
-  if (zlib_stream != NULL) {
-    g_win32_map_rc = (int)cmn_free((void **)&zlib_stream);
-  }
-  if (raw_scanlines != NULL) {
-    g_win32_map_rc = (int)cmn_free((void **)&raw_scanlines);
-  }
-  CloseHandle(hFile);
-  DeleteObject(hBitmap);
-  DeleteDC(hMemoryDC);
-  ReleaseDC(NULL, hWindowDC);
-
-  return cmn_free((void **)&lpbitmap);
 }
 
 /**
@@ -802,10 +840,10 @@ cmn_error_e cmn_window_create(cmn_app_t *app, cmn_window_t **out_window) {
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  g_win32_map_rc = (int)cmn_handle_map_add((void *)win->hwnd, win);
+  rc = win32_check_map_rc(cmn_handle_map_add((void *)win->hwnd, win));
 
   *out_window = win;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -1129,12 +1167,13 @@ cmn_error_e cmn_window_get_dpi_scale(cmn_window_t *window, float *out_scale) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_window_destroy(cmn_window_t **window) {
+  cmn_error_e rc;
   if (window == NULL || *window == NULL) {
     return CMN_ERR_INVAL;
   }
-  g_win32_map_rc = (int)cmn_handle_map_remove((void *)(*window)->hwnd);
+  rc = win32_check_map_rc(cmn_handle_map_remove((void *)(*window)->hwnd));
   DestroyWindow((*window)->hwnd);
-  return cmn_free((void **)window);
+  return win32_accum_err(rc, cmn_free((void **)window));
 }
 
 /**
@@ -1325,10 +1364,10 @@ cmn_error_e cmn_button_create(cmn_button_t **out_button) {
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  g_win32_map_rc = (int)cmn_handle_map_add((void *)btn->hwnd, btn);
+  rc = win32_check_map_rc(cmn_handle_map_add((void *)btn->hwnd, btn));
 
   *out_button = btn;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -1387,15 +1426,16 @@ cmn_error_e cmn_button_trigger_click(cmn_button_t *button) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_button_destroy(cmn_button_t **button) {
+  cmn_error_e rc;
   if (button == NULL || *button == NULL) {
     return CMN_ERR_INVAL;
   }
   if ((*button)->cmd_id >= 100 && (*button)->cmd_id < 100 + MAX_BUTTONS) {
     g_button_map[(*button)->cmd_id - 100] = NULL;
   }
-  g_win32_map_rc = (int)cmn_handle_map_remove((void *)(*button)->hwnd);
+  rc = win32_check_map_rc(cmn_handle_map_remove((void *)(*button)->hwnd));
   DestroyWindow((*button)->hwnd);
-  return cmn_free((void **)button);
+  return win32_accum_err(rc, cmn_free((void **)button));
 }
 
 /* --- Label --- */
@@ -1429,10 +1469,10 @@ cmn_error_e cmn_label_create(cmn_label_t **out_label) {
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  g_win32_map_rc = (int)cmn_handle_map_add((void *)lbl->hwnd, lbl);
+  rc = win32_check_map_rc(cmn_handle_map_add((void *)lbl->hwnd, lbl));
 
   *out_label = lbl;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -1458,12 +1498,13 @@ cmn_error_e cmn_label_set_text(cmn_label_t *label, const char *text) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_label_destroy(cmn_label_t **label) {
+  cmn_error_e rc;
   if (label == NULL || *label == NULL) {
     return CMN_ERR_INVAL;
   }
-  g_win32_map_rc = (int)cmn_handle_map_remove((void *)(*label)->hwnd);
+  rc = win32_check_map_rc(cmn_handle_map_remove((void *)(*label)->hwnd));
   DestroyWindow((*label)->hwnd);
-  return cmn_free((void **)label);
+  return win32_accum_err(rc, cmn_free((void **)label));
 }
 
 /* --- TextBox --- */
@@ -1497,10 +1538,10 @@ cmn_error_e cmn_textbox_create(cmn_textbox_t **out_textbox) {
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  g_win32_map_rc = (int)cmn_handle_map_add((void *)tb->hwnd, tb);
+  rc = win32_check_map_rc(cmn_handle_map_add((void *)tb->hwnd, tb));
 
   *out_textbox = tb;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -1585,12 +1626,13 @@ cmn_error_e cmn_textbox_get_text(cmn_textbox_t *textbox,
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_textbox_destroy(cmn_textbox_t **textbox) {
+  cmn_error_e rc;
   if (textbox == NULL || *textbox == NULL) {
     return CMN_ERR_INVAL;
   }
-  g_win32_map_rc = (int)cmn_handle_map_remove((void *)(*textbox)->hwnd);
+  rc = win32_check_map_rc(cmn_handle_map_remove((void *)(*textbox)->hwnd));
   DestroyWindow((*textbox)->hwnd);
-  return cmn_free((void **)textbox);
+  return win32_accum_err(rc, cmn_free((void **)textbox));
 }
 
 /* --- TextView --- */
@@ -1639,10 +1681,10 @@ cmn_error_e cmn_textview_create(cmn_textview_t **out_textview) {
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  g_win32_map_rc = (int)cmn_handle_map_add((void *)tv->hwnd, tv);
+  rc = win32_check_map_rc(cmn_handle_map_add((void *)tv->hwnd, tv));
 
   *out_textview = tv;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -1740,12 +1782,13 @@ cmn_error_e cmn_textview_get_text(cmn_textview_t *textview,
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_textview_destroy(cmn_textview_t **textview) {
+  cmn_error_e rc;
   if (textview == NULL || *textview == NULL) {
     return CMN_ERR_INVAL;
   }
-  g_win32_map_rc = (int)cmn_handle_map_remove((void *)(*textview)->hwnd);
+  rc = win32_check_map_rc(cmn_handle_map_remove((void *)(*textview)->hwnd));
   DestroyWindow((*textview)->hwnd);
-  return cmn_free((void **)textview);
+  return win32_accum_err(rc, cmn_free((void **)textview));
 }
 
 /* --- Layout Containers --- */
@@ -1779,10 +1822,10 @@ cmn_error_e cmn_vbox_create(cmn_vbox_t **out_vbox) {
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  g_win32_map_rc = (int)cmn_handle_map_add((void *)vbox->hwnd, vbox);
+  rc = win32_check_map_rc(cmn_handle_map_add((void *)vbox->hwnd, vbox));
 
   *out_vbox = vbox;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -1791,12 +1834,13 @@ cmn_error_e cmn_vbox_create(cmn_vbox_t **out_vbox) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_vbox_destroy(cmn_vbox_t **vbox) {
+  cmn_error_e rc;
   if (vbox == NULL || *vbox == NULL) {
     return CMN_ERR_INVAL;
   }
-  g_win32_map_rc = (int)cmn_handle_map_remove((void *)(*vbox)->hwnd);
+  rc = win32_check_map_rc(cmn_handle_map_remove((void *)(*vbox)->hwnd));
   DestroyWindow((*vbox)->hwnd);
-  return cmn_free((void **)vbox);
+  return win32_accum_err(rc, cmn_free((void **)vbox));
 }
 
 /**
@@ -1828,10 +1872,10 @@ cmn_error_e cmn_hbox_create(cmn_hbox_t **out_hbox) {
   if (rc != CMN_SUCCESS) {
     return rc;
   }
-  g_win32_map_rc = (int)cmn_handle_map_add((void *)hbox->hwnd, hbox);
+  rc = win32_check_map_rc(cmn_handle_map_add((void *)hbox->hwnd, hbox));
 
   *out_hbox = hbox;
-  return CMN_SUCCESS;
+  return rc;
 }
 
 /**
@@ -1840,12 +1884,13 @@ cmn_error_e cmn_hbox_create(cmn_hbox_t **out_hbox) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_hbox_destroy(cmn_hbox_t **hbox) {
+  cmn_error_e rc;
   if (hbox == NULL || *hbox == NULL) {
     return CMN_ERR_INVAL;
   }
-  g_win32_map_rc = (int)cmn_handle_map_remove((void *)(*hbox)->hwnd);
+  rc = win32_check_map_rc(cmn_handle_map_remove((void *)(*hbox)->hwnd));
   DestroyWindow((*hbox)->hwnd);
-  return cmn_free((void **)hbox);
+  return win32_accum_err(rc, cmn_free((void **)hbox));
 }
 
 /* --- Menus --- */

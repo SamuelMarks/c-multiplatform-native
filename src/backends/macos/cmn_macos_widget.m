@@ -14,8 +14,16 @@
 
 /** @brief Mock flag to force `cmn_textbox_get_text` failure. */
 static int g_cmn_mock_textbox_get_text_fail = 0;
-/** @brief Last handle map operation status code. */
-static int g_macos_map_rc = 0;
+
+/**
+ * @brief Normalizes handle map status codes when the global handle map is
+ * uninitialized.
+ * @param rc Status code returned by handle map helper.
+ * @return CMN_SUCCESS unless an unexpected internal failure occurred.
+ */
+static cmn_error_e macos_check_map_rc(cmn_error_e rc) {
+  return (rc == CMN_ERR_NOMEM) ? rc : CMN_SUCCESS;
+}
 
 /**
  * @brief Sets mock failure state for cmn_textbox_get_text.
@@ -478,16 +486,17 @@ cmn_error_e cmn_window_show(cmn_window_t *window) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_window_destroy(cmn_window_t **window) {
+  cmn_error_e rc;
   if (window == NULL || *window == NULL) {
     return CMN_ERR_INVAL;
   }
   @autoreleasepool {
-    g_macos_map_rc =
-        (int)cmn_handle_map_remove((__bridge void *)(*window)->ns_window);
+    rc = macos_check_map_rc(
+        cmn_handle_map_remove((__bridge void *)(*window)->ns_window));
     [(*window)->ns_window close];
     (*window)->ns_window = nil;
   }
-  return cmn_free((void **)window);
+  return (rc != CMN_SUCCESS) ? rc : cmn_free((void **)window);
 }
 
 /* --- Multiwindow & Dialogs --- */
@@ -765,19 +774,20 @@ cmn_error_e cmn_button_trigger_click(cmn_button_t *button) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_button_destroy(cmn_button_t **button) {
+  cmn_error_e rc;
   if (button == NULL || *button == NULL) {
     return CMN_ERR_INVAL;
   }
   @autoreleasepool {
-    g_macos_map_rc =
-        (int)cmn_handle_map_remove((__bridge void *)(*button)->ns_button);
+    rc = macos_check_map_rc(
+        cmn_handle_map_remove((__bridge void *)(*button)->ns_button));
     ((CmnButtonTarget *)(*button)->target).cmn_button = NULL;
     [(*button)->ns_button setTarget:nil];
     [(*button)->ns_button removeFromSuperview];
     (*button)->ns_button = nil;
     (*button)->target = nil;
   }
-  return cmn_free((void **)button);
+  return (rc != CMN_SUCCESS) ? rc : cmn_free((void **)button);
 }
 
 /* --- Label --- */
@@ -834,16 +844,17 @@ cmn_error_e cmn_label_set_text(cmn_label_t *label, const char *text) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_label_destroy(cmn_label_t **label) {
+  cmn_error_e rc;
   if (label == NULL || *label == NULL) {
     return CMN_ERR_INVAL;
   }
   @autoreleasepool {
-    g_macos_map_rc =
-        (int)cmn_handle_map_remove((__bridge void *)(*label)->ns_label);
+    rc = macos_check_map_rc(
+        cmn_handle_map_remove((__bridge void *)(*label)->ns_label));
     [(*label)->ns_label removeFromSuperview];
     (*label)->ns_label = nil;
   }
-  return cmn_free((void **)label);
+  return (rc != CMN_SUCCESS) ? rc : cmn_free((void **)label);
 }
 
 /* --- TextBox --- */
@@ -922,7 +933,10 @@ cmn_error_e cmn_textbox_set_password(cmn_textbox_t *textbox, int is_password) {
     [new_field setSelectable:YES];
     [new_field setStringValue:val ? val : @""];
 
-    g_macos_map_rc = (int)cmn_handle_map_remove((__bridge void *)old_field);
+    if (macos_check_map_rc(cmn_handle_map_remove((__bridge void *)old_field)) !=
+        CMN_SUCCESS) {
+      return CMN_ERR_NOMEM;
+    }
     if (superview != nil) {
       if ([superview isKindOfClass:[NSStackView class]]) {
         NSStackView *stack = (NSStackView *)superview;
@@ -949,8 +963,10 @@ cmn_error_e cmn_textbox_set_password(cmn_textbox_t *textbox, int is_password) {
       }
     }
     textbox->ns_textbox = new_field;
-    g_macos_map_rc =
-        (int)cmn_handle_map_add((__bridge void *)new_field, textbox);
+    if (macos_check_map_rc(cmn_handle_map_add((__bridge void *)new_field,
+                                              textbox)) != CMN_SUCCESS) {
+      return CMN_ERR_NOMEM;
+    }
   }
   return CMN_SUCCESS;
 }
@@ -986,16 +1002,17 @@ cmn_error_e cmn_textbox_get_text(cmn_textbox_t *textbox,
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_textbox_destroy(cmn_textbox_t **textbox) {
+  cmn_error_e rc;
   if (textbox == NULL || *textbox == NULL) {
     return CMN_ERR_INVAL;
   }
   @autoreleasepool {
-    g_macos_map_rc =
-        (int)cmn_handle_map_remove((__bridge void *)(*textbox)->ns_textbox);
+    rc = macos_check_map_rc(
+        cmn_handle_map_remove((__bridge void *)(*textbox)->ns_textbox));
     [(*textbox)->ns_textbox removeFromSuperview];
     (*textbox)->ns_textbox = nil;
   }
-  return cmn_free((void **)textbox);
+  return (rc != CMN_SUCCESS) ? rc : cmn_free((void **)textbox);
 }
 
 /* --- TextView --- */
@@ -1137,17 +1154,18 @@ cmn_error_e cmn_textview_get_text(cmn_textview_t *textview,
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_textview_destroy(cmn_textview_t **textview) {
+  cmn_error_e rc;
   if (textview == NULL || *textview == NULL) {
     return CMN_ERR_INVAL;
   }
   @autoreleasepool {
-    g_macos_map_rc =
-        (int)cmn_handle_map_remove((__bridge void *)(*textview)->ns_scrollview);
+    rc = macos_check_map_rc(
+        cmn_handle_map_remove((__bridge void *)(*textview)->ns_scrollview));
     [(*textview)->ns_scrollview removeFromSuperview];
     (*textview)->ns_textview = nil;
     (*textview)->ns_scrollview = nil;
   }
-  return cmn_free((void **)textview);
+  return (rc != CMN_SUCCESS) ? rc : cmn_free((void **)textview);
 }
 
 /* --- Automation --- */
@@ -1238,16 +1256,17 @@ cmn_error_e cmn_vbox_create(cmn_vbox_t **out_vbox) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_vbox_destroy(cmn_vbox_t **vbox) {
+  cmn_error_e rc;
   if (vbox == NULL || *vbox == NULL) {
     return CMN_ERR_INVAL;
   }
   @autoreleasepool {
-    g_macos_map_rc =
-        (int)cmn_handle_map_remove((__bridge void *)(*vbox)->ns_stack);
+    rc = macos_check_map_rc(
+        cmn_handle_map_remove((__bridge void *)(*vbox)->ns_stack));
     [(*vbox)->ns_stack removeFromSuperview];
     (*vbox)->ns_stack = nil;
   }
-  return cmn_free((void **)vbox);
+  return (rc != CMN_SUCCESS) ? rc : cmn_free((void **)vbox);
 }
 
 /**
@@ -1289,16 +1308,17 @@ cmn_error_e cmn_hbox_create(cmn_hbox_t **out_hbox) {
  * @return CMN_SUCCESS on success, error code otherwise.
  */
 cmn_error_e cmn_hbox_destroy(cmn_hbox_t **hbox) {
+  cmn_error_e rc;
   if (hbox == NULL || *hbox == NULL) {
     return CMN_ERR_INVAL;
   }
   @autoreleasepool {
-    g_macos_map_rc =
-        (int)cmn_handle_map_remove((__bridge void *)(*hbox)->ns_stack);
+    rc = macos_check_map_rc(
+        cmn_handle_map_remove((__bridge void *)(*hbox)->ns_stack));
     [(*hbox)->ns_stack removeFromSuperview];
     (*hbox)->ns_stack = nil;
   }
-  return cmn_free((void **)hbox);
+  return (rc != CMN_SUCCESS) ? rc : cmn_free((void **)hbox);
 }
 
 /* --- Menus --- */

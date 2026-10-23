@@ -1,7 +1,9 @@
 /* clang-format off */
 #include "cmn/app.h"
 #include "cmn/memory.h"
+#ifdef CMN_HAS_GTK3
 #include <gtk/gtk.h>
+#endif
 /* clang-format on */
 
 /**
@@ -13,7 +15,8 @@
  * @brief Internal representation of a Linux GTK3 application instance.
  */
 struct cmn_app_s {
-  int is_running; /**< Non-zero while GTK3 main loop is running. */
+  int is_running;  /**< Non-zero while GTK3 main loop is running. */
+  int has_display; /**< Non-zero when a GTK3 display connection is active. */
 };
 
 /**
@@ -24,8 +27,10 @@ struct cmn_app_s {
 cmn_error_e cmn_app_create(cmn_app_t **out_app) {
   cmn_error_e rc;
   cmn_app_t *app = NULL;
+#ifdef CMN_HAS_GTK3
   int argc = 0;
   char **argv = NULL;
+#endif
 
   if (out_app == NULL) {
     return CMN_ERR_INVAL;
@@ -36,10 +41,11 @@ cmn_error_e cmn_app_create(cmn_app_t **out_app) {
     return rc;
   }
 
-  if (!gtk_init_check(&argc, &argv)) {
-    rc = cmn_free((void **)&app);
-    return rc != CMN_SUCCESS ? rc : CMN_ERR_IO;
-  }
+#ifdef CMN_HAS_GTK3
+  app->has_display = gtk_init_check(&argc, &argv) ? 1 : 0;
+#else
+  app->has_display = 0;
+#endif
 
   app->is_running = 0;
   *out_app = app;
@@ -58,7 +64,11 @@ cmn_error_e cmn_app_run(cmn_app_t *app) {
 
   app->is_running = 1;
 #ifndef CMN_TESTING
-  gtk_main();
+#ifdef CMN_HAS_GTK3
+  if (app->has_display) {
+    gtk_main();
+  }
+#endif
 #endif
   return CMN_SUCCESS;
 }
@@ -76,7 +86,11 @@ cmn_error_e cmn_app_quit(cmn_app_t *app) {
   if (app->is_running) {
     app->is_running = 0;
 #ifndef CMN_TESTING
-    gtk_main_quit();
+#ifdef CMN_HAS_GTK3
+    if (app->has_display) {
+      gtk_main_quit();
+    }
+#endif
 #endif
   }
 
@@ -103,12 +117,13 @@ struct task_data {
   cmn_error_e (*task)(void *); /**< Task callback function. */
   void *userdata;              /**< User data pointer. */
 };
+
 /**
  * @brief GTK3 idle callback adapter executing a posted cmn task.
  * @param user_data Pointer to `struct task_data`.
  * @return CMN_SUCCESS on success, error code otherwise.
  */
-static cmn_error_e cmn_linux_idle_task(gpointer user_data) {
+static cmn_error_e cmn_linux_idle_task(void *user_data) {
   struct task_data *td = (struct task_data *)user_data;
   cmn_error_e rc = CMN_SUCCESS;
   if (td != NULL) {
@@ -133,32 +148,24 @@ static cmn_error_e cmn_linux_idle_task(gpointer user_data) {
  */
 cmn_error_e cmn_app_post_task(cmn_app_t *app, cmn_error_e (*task)(void *),
                               void *userdata) {
+  struct task_data *td = NULL;
+  cmn_error_e rc;
   if (app == NULL || task == NULL) {
     return CMN_ERR_INVAL;
   }
 
-#ifdef CMN_TESTING
-  {
-    struct task_data *td = NULL;
-    cmn_error_e rc = cmn_malloc(sizeof(struct task_data), (void **)&td);
-    if (rc != CMN_SUCCESS) {
-      return rc;
-    }
-    td->task = task;
-    td->userdata = userdata;
-    return cmn_linux_idle_task(td);
+  rc = cmn_malloc(sizeof(struct task_data), (void **)&td);
+  if (rc != CMN_SUCCESS) {
+    return rc;
   }
-#else
-  {
-    struct task_data *td = NULL;
-    cmn_error_e rc = cmn_malloc(sizeof(struct task_data), (void **)&td);
-    if (rc != CMN_SUCCESS) {
-      return rc;
-    }
-    td->task = task;
-    td->userdata = userdata;
+  td->task = task;
+  td->userdata = userdata;
+
+#if !defined(CMN_TESTING) && defined(CMN_HAS_GTK3)
+  if (app->has_display) {
     g_idle_add((GSourceFunc)cmn_linux_idle_task, td);
+    return CMN_SUCCESS;
   }
-  return CMN_SUCCESS;
 #endif
+  return cmn_linux_idle_task(td);
 }

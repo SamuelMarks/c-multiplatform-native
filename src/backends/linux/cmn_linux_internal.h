@@ -9,7 +9,16 @@ extern "C" {
 #include "cmn_internal.h"
 #include "cmn/app.h"
 #include "cmn/widget.h"
+#ifdef CMN_HAS_GTK3
 #include <gtk/gtk.h>
+#else
+/** @brief Fallback opaque GTK widget type when compiled without GTK3. */
+typedef void GtkWidget;
+/** @brief Fallback GLib boolean type when compiled without GTK3. */
+typedef int gboolean;
+/** @brief Fallback GLib generic pointer type when compiled without GTK3. */
+typedef void *gpointer;
+#endif
 /* clang-format on */
 
 /**
